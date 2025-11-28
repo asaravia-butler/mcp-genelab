@@ -327,3 +327,197 @@ I'll create Venn diagrams comparing the differentially expressed genes between t
 4. Core spaceflight response: The 186 commonly upregulated genes likely represent the core transcriptional response to spaceflight, regardless of duration, including key pathways like coagulation, immune response, and vascular remodeling.
 
 Would you like me to perform any additional analyses on these results?  
+
+`3,1`
+
+I'll create a comparison between the Basal Control conditions (indices 3 and 1). 
+
+> G  Select assay
+
+## **Selected Assay for OSD-244**
+
+### **Comparison: Ground Control (\~30 day) vs Basal Control (1 day)**
+
+* Condition 1: Ground Control, \~30 day, On Earth, Upon euthanasia  
+* Condition 2: Basal Control, 1 day, On Earth, Carcass  
+* Assay ID: OSD-244-b3e374ff70a9a2d124a20fd71f9c7eb1
+
+This comparison will show gene expression changes that occur over \~30 days in ground control conditions (essentially time/age effects rather than spaceflight effects).  
+---
+
+Would you like me to:
+
+1. Find differentially expressed genes for this comparison  
+2. Create a volcano plot  
+3. Both
+
+`3` 
+
+I'll perform both analyses \- finding differentially expressed genes and creating a volcano plot for the Ground Control (\~30 day) vs Basal Control (1 day) comparison.
+
+> G  Find differentially expressed genes  
+> G  Create volcano plot
+
+# **Ground Control (\~30 day) vs Basal Control (1 day) Analysis**
+
+## **Differentially Expressed Genes**
+
+### **Top 10 Upregulated Genes**
+
+| Gene Symbol | Log2 Fold Change | Adjusted P-value | Potential Function |
+| ----- | ----- | ----- | ----- |
+| A630073D07Rik | 6.63 | 0.0365 | Uncharacterized |
+| Wif1 | 5.29 | 0.0066 | Wnt inhibitory factor |
+| Ibsp | 5.23 | 0.0375 | Bone sialoprotein |
+| Col10a1 | 4.95 | 0.0066 | Collagen type X |
+| Fabp9 | 4.53 | 0.0021 | Fatty acid binding protein |
+| Chst5 | 4.08 | 0.0457 | Carbohydrate sulfotransferase |
+| Col2a1 | 3.98 | 0.0307 | Collagen type II |
+| Reg1 | 3.89 | 0.0337 | Regenerating islet-derived protein |
+| Iapp | 3.83 | 0.0337 | Islet amyloid polypeptide |
+| Ucma | 3.72 | 0.0296 | Unique cartilage matrix-associated protein |
+
+### **Top 10 Downregulated Genes**
+
+| Gene Symbol | Log2 Fold Change | Adjusted P-value | Potential Function |
+| ----- | ----- | ----- | ----- |
+| Trav7d-2 | \-22.85 | 0.0022 | T cell receptor alpha variable |
+| Nppb | \-7.75 | 0.0028 | Natriuretic peptide B |
+| Cyp2c54 | \-6.43 | 0.0121 | Cytochrome P450 |
+| Nppa | \-6.19 | 0.0451 | Natriuretic peptide A |
+| Myh8 | \-6.12 | 0.0190 | Myosin heavy chain 8 |
+| Nctc1 | \-5.86 | 0.0301 | C-type lectin |
+| Gm8424 | \-5.48 | 0.0194 | Predicted gene |
+| Apcs | \-5.40 | 0.0210 | Serum amyloid P-component |
+| Tnnc2 | \-5.34 | 0.0063 | Troponin C2, fast skeletal |
+| Cyp2b9 | \-5.32 | 0.0114 | Cytochrome P450 |
+
+---
+
+## **Volcano Plot Results**
+
+![Download Volcano Plot](3,1  
+I'll create a comparison between the Basal Control conditions (indices 3 and 1).  
+G  
+Select assay
+
+## **Selected Assay for OSD-244**
+
+### **Comparison: Ground Control (\~30 day) vs Basal Control (1 day)**
+
+* Condition 1: Ground Control, \~30 day, On Earth, Upon euthanasia  
+* Condition 2: Basal Control, 1 day, On Earth, Carcass  
+* Assay ID: OSD-244-b3e374ff70a9a2d124a20fd71f9c7eb1
+
+This comparison will show gene expression changes that occur over \~30 days in ground control conditions (essentially time/age effects rather than spaceflight effects).  
+---
+
+Would you like me to:
+
+1. Find differentially expressed genes for this comparison  
+2. Create a volcano plot  
+3. Both
+
+`3`
+
+I'll perform both analyses \- finding differentially expressed genes and creating a volcano plot for the Ground Control (\~30 day) vs Basal Control (1 day) comparison.  
+
+> G  Find differentially expressed genes  
+> G  Create volcano plot
+
+# **Ground Control (\~30 day) vs Basal Control (1 day) Analysis**
+
+## **Differentially Expressed Genes**
+
+### **Top 10 Upregulated Genes**
+
+| Gene Symbol | Log2 Fold Change | Adjusted P-value | Potential Function |
+| ----- | ----- | ----- | ----- |
+| A630073D07Rik | 6.63 | 0.0365 | Uncharacterized |
+| Wif1 | 5.29 | 0.0066 | Wnt inhibitory factor |
+| Ibsp | 5.23 | 0.0375 | Bone sialoprotein |
+| Col10a1 | 4.95 | 0.0066 | Collagen type X |
+| Fabp9 | 4.53 | 0.0021 | Fatty acid binding protein |
+| Chst5 | 4.08 | 0.0457 | Carbohydrate sulfotransferase |
+| Col2a1 | 3.98 | 0.0307 | Collagen type II |
+| Reg1 | 3.89 | 0.0337 | Regenerating islet-derived protein |
+| Iapp | 3.83 | 0.0337 | Islet amyloid polypeptide |
+| Ucma | 3.72 | 0.0296 | Unique cartilage matrix-associated protein |
+
+### **Top 10 Downregulated Genes**
+
+| Gene Symbol | Log2 Fold Change | Adjusted P-value | Potential Function |
+| ----- | ----- | ----- | ----- |
+| Trav7d-2 | \-22.85 | 0.0022 | T cell receptor alpha variable |
+| Nppb | \-7.75 | 0.0028 | Natriuretic peptide B |
+| Cyp2c54 | \-6.43 | 0.0121 | Cytochrome P450 |
+| Nppa | \-6.19 | 0.0451 | Natriuretic peptide A |
+| Myh8 | \-6.12 | 0.0190 | Myosin heavy chain 8 |
+| Nctc1 | \-5.86 | 0.0301 | C-type lectin |
+| Gm8424 | \-5.48 | 0.0194 | Predicted gene |
+| Apcs | \-5.40 | 0.0210 | Serum amyloid P-component |
+| Tnnc2 | \-5.34 | 0.0063 | Troponin C2, fast skeletal |
+| Cyp2b9 | \-5.32 | 0.0114 | Cytochrome P450 |
+
+---
+
+## **Volcano Plot Results**
+
+![Download Volcano Plot](volcano_plot_OSD-244_Ground_Control_30_day_On_Earth_Upon_euthanasia_vs_Basal_Control_1_day_On_Earth_Carcass.png)
+
+Summary Statistics:
+
+* Total genes analyzed: 164  
+* Significantly upregulated: 71 (43.3%)  
+* Significantly downregulated: 82 (50.0%)  
+* Not significant: 11 (6.7%)
+
+---
+
+## **Key Biological Insights**
+
+This comparison reveals developmental/maturation changes over \~30 days in ground control conditions:  
+Upregulated (maturation markers):
+
+* Bone/cartilage development: Ibsp, Col10a1, Col2a1, Ucma \- indicates skeletal maturation  
+* Metabolic changes: Fabp9, Iapp, Reg1 \- pancreatic and metabolic maturation  
+* Wnt signaling: Wif1 \- developmental pathway regulation
+
+Downregulated (early life markers):
+
+* Cardiac natriuretic peptides: Nppb, Nppa \- reduced cardiac stress signaling  
+* Muscle development: Myh8, Tnnc2 \- transition from neonatal to adult muscle isoforms  
+* T cell receptor: Trav7d-2 \- immune system changes  
+* Metabolic enzymes: Cyp2c54, Cyp2b9 \- developmental shifts in drug metabolism
+
+This represents normal developmental transitions from neonatal (1 day) to juvenile (\~30 day) stages.  
+Would you like me to compare this with the spaceflight data or perform additional analyses?  
+  
+Summary Statistics:
+
+* Total genes analyzed: 164  
+* Significantly upregulated: 71 (43.3%)  
+* Significantly downregulated: 82 (50.0%)  
+* Not significant: 11 (6.7%)
+
+---
+
+## **Key Biological Insights**
+
+This comparison reveals developmental/maturation changes over \~30 days in ground control conditions:  
+Upregulated (maturation markers):
+
+* Bone/cartilage development: Ibsp, Col10a1, Col2a1, Ucma \- indicates skeletal maturation  
+* Metabolic changes: Fabp9, Iapp, Reg1 \- pancreatic and metabolic maturation  
+* Wnt signaling: Wif1 \- developmental pathway regulation
+
+Downregulated (early life markers):
+
+* Cardiac natriuretic peptides: Nppb, Nppa \- reduced cardiac stress signaling  
+* Muscle development: Myh8, Tnnc2 \- transition from neonatal to adult muscle isoforms  
+* T cell receptor: Trav7d-2 \- immune system changes  
+* Metabolic enzymes: Cyp2c54, Cyp2b9 \- developmental shifts in drug metabolism
+
+This represents normal developmental transitions from neonatal (1 day) to juvenile (\~30 day) stages.  
+Would you like me to compare this with the spaceflight data or perform additional analyses?  
+
