@@ -1,8 +1,18 @@
+import os
 import sys
 import json
 import logging
+import tempfile
+import shutil
 import re
 from typing import Any, Literal, Optional
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+from matplotlib_venn import venn2, venn3
+from adjustText import adjust_text
 
 import mcp.types as types
 from mcp.server.fastmcp import FastMCP
@@ -34,7 +44,7 @@ def create_mcp_server(neo4j_driver: AsyncDriver, database: str = "neo4j", instru
     mcp: FastMCP = FastMCP("mcp-genelab", dependencies=["neo4j", "pydantic"], instructions=instructions)
 
     async def get_neo4j_schema() -> list[types.TextContent]:
-        """List all node, their attributes and their relationships to other nodes in the neo4j database.
+        """List all nodes, their attributes and their relationships to other nodes in the neo4j database.
         If this fails with a message that includes "Neo.ClientError.Procedure.ProcedureNotFound"
         suggest that the user install and enable the APOC plugin.
         """
@@ -63,13 +73,17 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Database error retrieving schema: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def read_neo4j_cypher(
+    async def query(
         query: str = Field(..., description="The Cypher query to execute."),
         params: Optional[dict[str, Any]] = Field(
             None, description="The parameters to pass to the Cypher query."
         ),
     ) -> list[types.TextContent]:
-        """Execute a read Cypher query on the neo4j database."""
+        """Execute a Cypher query on the Neo4j database. 
+
+        If the question is about up- or down-regulated genes, use the find_upregulated_genes
+        or find_downreguluated genes
+        """
 
         if _is_write_query(query):
             raise ValueError("Only MATCH queries are allowed for read-query")
@@ -174,157 +188,1109 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Database error retrieving relationship metadata: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def find_downregulated_genes(
-        study: str = Field(..., description="The study with the assay data (e.g., 'OSD-255')"),
-        organism: str = Field(..., description="The organism to search for (e.g., 'Mus musculus')"),
-        material: str = Field(..., description="The organ or organ/tissue/cell type to search for (e.g., 'liver')"),
-        factor_space_1: str = Field("Ground Control", description="The first experimental grouping of samples using in the assay, indicating whether is was exposed to Space Flight or control conditions. (e.g., 'Ground Control')"),
-        factor_space_2: str = Field("Space Flight", description="The second experimental grouping of samples using in the assay, indicating whether is was exposed to Space Flight or control conditions. (e.g., 'Space Flight')"),
-        top_n: int = Field(100, description="Number of top downregulated genes to return")
-    ) -> list[types.TextContent]:
-        """Find downregulated genes for a specific study, organism, and specific organ or tissue.
+    async def select_assay(
+        study_id: Optional[str] = None,
+        selection: Optional[str] = None
+    ) -> list[types.Content]:
+        """Select assay for a study and render the response in markdown format.
         
-        This tool finds genes that are downregulated for two experimental conditions
-        for a specific organism and tissue/organ/cell type. It ensures that only experiments
-        with matching factors are compared.
+        First call (selection=None):
+        - If study_id missing, prompt for one (e.g., 'OSD-253').
+        - Build a list of unique factor arrays across all assays.
+        - Return a numbered menu as a markdown table!
+        
+        Second call (selection='i,j,k,l,...,m,n'):
+        - Pairs consecutive indices: (i,j), (k,l), ..., (m,n)
+        - Returns assay_id(s) for each pair comparison
+        - Must provide an even number of indices
+        
+        FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
         """
+        import re as _re
+        import json as _json
 
-        query = """
-        MATCH p = (s:Study)
-                  --> (a:Assay)
-                  -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
-                  (g:MGene)
-        WHERE s.identifier = $study
-          AND s.organism = $organism
-          AND a.factor_space_1  = $factor_space_1
-          AND a.factor_space_2  = $factor_space_2
-          AND a.material_name_1 = $material
-          AND a.material_name_2 = $material
-          AND m.log2fc          < 0
+        if not study_id:
+            return [types.TextContent(type="text", text="Please provide a study_id (e.g., OSD-253).")]
 
-        // strip out the two labels from each factors array
-        WITH s, g, m, a,
-             [f IN a.factors_1 WHERE NOT f IN [$factor_space_1,$factor_space_2]] AS filtered_factors1,
-             [f IN a.factors_2 WHERE NOT f IN [$factor_space_1,$factor_space_2]] AS filtered_factors2
-
-        // only keep rows where the remaining factors match
-        WHERE filtered_factors1 = filtered_factors2
-
-        WITH s, g, m, a, filtered_factors1, filtered_factors2
-        ORDER BY m.log2fc ASC
-        LIMIT $top_n
-
-        RETURN
-          'downregulated'      AS regulation,
-          s.identifier         AS study,
-          s.organism           AS organism,
-          g.symbol             AS symbol,
-          m.log2fc             AS log2fc,
-          m.adj_p_value        AS adj_p_value,
-          a.factors_1          AS factors_1,
-          a.factors_2          AS factors_2
+        cypher = """
+        MATCH (s:Study {identifier: $study_id})-[:PERFORMED_SpAS]->(a:Assay)
+        RETURN a.identifier AS assay_id,
+               coalesce(a.factors_1, []) AS f1,
+               coalesce(a.factors_2, []) AS f2
+        ORDER BY assay_id
         """
-
-        params = {
-            "study": study,
-            "organism": organism,
-            "material": material,
-            "factor_space_1": factor_space_1,
-            "factor_space_2": factor_space_2,
-            "top_n": top_n
-        }
 
         try:
             async with neo4j_driver.session(database=database) as session:
-                results_json_str = await session.execute_read(_read, query, params)
-
-                logger.debug(f"Find downregulated genes query returned {len(results_json_str)} characters")
-
-                return [types.TextContent(type="text", text=results_json_str)]
-
+                res = await session.run(cypher, {"study_id": study_id})
+                rows = await res.data()
         except Exception as e:
-            logger.error(f"Database error finding downregulated genes: {e}")
-            return [types.TextContent(type="text", text=f"Error: {e}")]
+            logger.exception("select_assay query failed")
+            return [types.TextContent(type="text", text=f"Error querying study '{study_id}': {e}")]
 
-    async def find_upregulated_genes(
-        study: str = Field(..., description="The study with the assay data (e.g., 'OSD-255')"),
-        organism: str = Field(..., description="The organism to search for (e.g., 'Mus musculus')"),
-        material: str = Field(..., description="The organ or organ/tissue/cell type to search for (e.g., 'liver')"),
-        factor_space_1: str = Field("Ground Control", description="The first experimental grouping of samples using in the assay, indicating whether is was exposed to Space Flight or control conditions. (e.g., 'Ground Control')"),
-        factor_space_2: str = Field("Space Flight", description="The second experimental grouping of samples using in the assay, indicating whether is was exposed to Space Flight or control conditions. (e.g., 'Space Flight')"),
-        top_n: int = Field(100, description="Number of top upregulated genes to return")
-    ) -> list[types.TextContent]:
-        """Find upregulated genes for a specific study, organism, and specific organ or tissue.
+        if not rows:
+            return [types.TextContent(type="text", text=f"No assays found for study '{study_id}'.")]
+
+        def normalize(arr):
+            if not isinstance(arr, list):
+                return []
+            return [str(x) for x in arr if x is not None]
+
+        unique_arrays = []
+        seen = set()
+        for r in rows:
+            f1 = normalize(r.get("f1"))
+            f2 = normalize(r.get("f2"))
+            for arr in (f1, f2):
+                if not arr:
+                    continue
+                key = tuple(arr)
+                if key not in seen:
+                    seen.add(key)
+                    unique_arrays.append(arr)
+
+        unique_arrays = sorted(unique_arrays)
+
+        if not unique_arrays:
+            return [types.TextContent(type="text", text=f"Study '{study_id}' has no non-empty factor arrays in any assay.")]
+
+        def _fmt(arr):
+            arr_str = ",".join(_json.dumps(x) for x in arr)
+            return arr_str.replace('"', '')
+
+
+        if selection is None:
+            lines = []
+            lines.append("FORMATTING INSTRUCTION: RENDER THIS RESPONSE IN MARKDOWN FORMAT!\n")
+            lines.append(f"## Factor arrays across all assays for study: {study_id}")
+            lines.append("")  # Empty line for better markdown spacing
+            lines.append("**Choose an EVEN number of indices for pairwise comparisons, e.g., '1,2,3,4' creates pairs (1 vs 2) and (3 vs 4):**")
+            lines.append("")  # Empty line before table
+            # Create markdown table with index and factors array
+            lines.append("| Index | Factors |")
+            lines.append("|-------|---------|")
+            for i, arr in enumerate(unique_arrays, 1):
+                lines.append(f"| {i} | {_fmt(arr)} |")
+
+            return [
+                types.TextContent(type="text", text="\n".join(lines), mimeType="text/markdown"),
+                types.TextContent(type="text", text="INSTRUCTION: When suggesting pairs of indices, the index related to Space Flight should be first."),
+            ]
+
+        parts = [p for p in _re.split(r"[,\s]+", selection.strip()) if p]
+        if len(parts) < 2 or not all(p.isdigit() for p in parts):
+            return [types.TextContent(type="text", text=f"Please provide at least two indices like '1,2' or '1,2,3,4'. Got: '{selection}'.")]
+
+        # Check for even number of indices
+        if len(parts) % 2 != 0:
+            return [types.TextContent(type="text", text=f"Please provide an EVEN number of indices for pairwise comparisons. Got {len(parts)} indices: {selection}.")]
+
+        indices = [int(p) for p in parts]
+        n = len(unique_arrays)
         
-        This tool finds genes that are upregulated for two experimental conditions
-        for a specific organism and tissue/organ/cell type. It ensures that only experiments
-        with matching factors are compared.
+        # Validate all indices are in range and unique
+        if not all(1 <= idx <= n for idx in indices):
+            return [types.TextContent(type="text", text=f"All indices must be in range 1..{n}. Got: {indices}.")]
+
+        # Create pairs from consecutive indices: (i,j), (k,l), ..., (m,n)
+        pairs = [(indices[i], indices[i+1]) for i in range(0, len(indices), 2)]
+        
+        # Find assay IDs for each pair comparison
+        comparisons = []
+        for pair_idx, (idx1, idx2) in enumerate(pairs, 1):
+            array1 = unique_arrays[idx1 - 1]
+            array2 = unique_arrays[idx2 - 1]
+            key1 = tuple(array1)
+            key2 = tuple(array2)
+            
+            # Find matching assay
+            match_ids = set()
+            for r in rows:
+                f1 = normalize(r.get("f1"))
+                f2 = normalize(r.get("f2"))
+                # Check both orderings: (array1, array2) or (array2, array1)
+                #if (tuple(f1) == key1 and tuple(f2) == key2) or \
+                #   (tuple(f1) == key2 and tuple(f2) == key1):
+                if (tuple(f1) == key1 and tuple(f2) == key2):
+                    match_ids.add(r.get("assay_id"))
+                    # break  # TODO Keep first match only (eliminate duplicate assays)
+            
+            comparisons.append({
+                "pair_number": pair_idx,
+                "index1": idx1,
+                "array1": array1,
+                "index2": idx2,
+                "array2": array2,
+                "assay_ids": sorted(match_ids),
+                "selected_assay_id": next(iter(match_ids)) if len(match_ids) == 1 else None
+            })
+        
+        # Build response
+        lines = []
+        lines.append(f"## Selected Assays for {study_id}\n")
+        
+        for comp in comparisons:
+            lines.append(f"### Pair {comp['pair_number']}: Index {comp['index1']} vs Index {comp['index2']}")
+            lines.append(f"**Condition 1 (Index {comp['index1']}):** {_fmt(comp['array1'])}")
+            lines.append(f"**Condition 2 (Index {comp['index2']}):** {_fmt(comp['array2'])}")
+            
+            if comp['selected_assay_id']:
+                lines.append(f"**Assay ID:** `{comp['selected_assay_id']}`")
+            elif len(comp['assay_ids']) == 0:
+                lines.append("**Status:** No matching assay found")
+            else:
+                lines.append(f"**Status:** Multiple matches: {', '.join(comp['assay_ids'])}")
+            lines.append("")
+        
+        # Add suggested next steps
+        lines.append("\n## Suggested Next Steps:\n")
+        
+        if len(pairs) == 1:
+            # Single pair - standard analysis
+            lines.append("1. Find differentially expressed genes")
+            lines.append("2. Create a volcano plot")
+            lines.append("3. Perform pathway enrichment analysis")
+        else:
+            # Multiple pairs - suggest comparative analysis
+            lines.append("1. Find differentially expressed genes for each comparison")
+            lines.append("2. Create volcano plots for individual comparisons")
+            lines.append("3. Identify genes that show consistent changes across comparisons")
+            lines.append("4. **Create correlation plot** to compare gene expression patterns across conditions")
+        
+        return [
+            types.TextContent(type="text", text="\n".join(lines), mimeType="text/markdown"),
+        ]
+    
+    async def find_differentially_expressed_genes(
+        assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
+        top_n: int = Field(5, description="How many genes to return for each of up- and down-regulated lists")
+    ) -> list[types.TextContent]:
+        """Return the top-N up- and down-regulated genes for a given assay_id.
+    
+        This tool runs two queries on the GeneLab KG:
+          1) Top-N upregulated genes (log2fc > 0, highest first)
+          2) Top-N downregulated genes (log2fc < 0, lowest first)
+        
+        FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
         """
-
-        query = """
-        MATCH p = (s:Study)
-                  --> (a:Assay)
-                  -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
-                  (g:MGene)
-        WHERE s.identifier = $study
-          AND s.organism = $organism
-          AND a.factor_space_1  = $factor_space_1
-          AND a.factor_space_2  = $factor_space_2
-          AND a.material_name_1 = $material
-          AND a.material_name_2 = $material
-          AND m.log2fc          > 0
-
-        // strip out the two labels from each factors array
-        WITH s, g, m, a,
-             [f IN a.factors_1 WHERE NOT f IN [$factor_space_1,$factor_space_2]] AS filtered_factors1,
-             [f IN a.factors_2 WHERE NOT f IN [$factor_space_1,$factor_space_2]] AS filtered_factors2
-
-        // only keep rows where the remaining factors match
-        WHERE filtered_factors1 = filtered_factors2
-
-        WITH s, g, m, a, filtered_factors1, filtered_factors2
+        up_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+              -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
+              (g:MGene)
+        WHERE m.log2fc > 0
+        RETURN
+          'upregulated'  AS regulation,
+          g.symbol       AS symbol,
+          m.log2fc       AS log2fc,
+          m.adj_p_value  AS adj_p_value
         ORDER BY m.log2fc DESC
         LIMIT $top_n
-
+        """
+    
+        down_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+              -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
+              (g:MGene)
+        WHERE m.log2fc < 0
         RETURN
-          'upregulated'        AS regulation,
-          s.identifier         AS study,
-          s.organism           AS organism,
-          g.symbol             AS symbol,
-          m.log2fc             AS log2fc,
-          m.adj_p_value        AS adj_p_value,
-          a.factors_1          AS factors_1,
-          a.factors_2          AS factors_2
+          'downregulated' AS regulation,
+          g.symbol        AS symbol,
+          m.log2fc        AS log2fc,
+          m.adj_p_value   AS adj_p_value
+        ORDER BY m.log2fc ASC
+        LIMIT $top_n
+        """
+    
+        try:
+            import json as _json
+    
+            async with neo4j_driver.session(database=database) as session:
+                up_json_str = await session.execute_read(_read, up_cypher, {"assay_id": assay_id, "top_n": top_n})
+                down_json_str = await session.execute_read(_read, down_cypher, {"assay_id": assay_id, "top_n": top_n})
+    
+            up = _json.loads(up_json_str)
+            down = _json.loads(down_json_str)
+    
+            # Format as markdown tables for better display
+            def _fmt_markdown_table(rows, title):
+                """Format results as a markdown table"""
+                if not rows:
+                    return f"## **{title}**\nNo significantly {title.lower()} genes were found.\n"
+                
+                lines = [
+                    f"## **{title}**\n",
+                    "| Gene Symbol | Log2 Fold Change | Adjusted P-value |",
+                    "|-------------|------------------|------------------|"
+                ]
+                
+                for r in rows:
+                    symbol = r.get('symbol', 'N/A')
+                    log2fc = r.get('log2fc')
+                    adj_p = r.get('adj_p_value')
+                    
+                    # Format numbers nicely
+                    log2fc_str = f"{log2fc:.2f}" if log2fc is not None else "N/A"
+                    adj_p_str = f"{adj_p}" if adj_p is not None else "N/A"
+                    
+                    lines.append(f"| **{symbol}** | {log2fc_str} | {adj_p_str} |")
+                
+                return "\n".join(lines)
+    
+            # Create human-readable markdown output
+            human_lines = [
+                f"Top differentially expressed genes for assay: {assay_id}\n",
+                _fmt_markdown_table(up, "Upregulated Genes"),
+                "",
+                _fmt_markdown_table(down, "Downregulated Genes")
+            ]
+            human = "\n".join(human_lines)
+    
+            return [
+                types.TextContent(type="text", text=human, mimeType="text/markdown"),
+            ]
+    
+        except Exception as e:
+            logger.error(f"Error in find_de_genes: {e}")
+            return [types.TextContent(type="text", text=f"Error in find_de_genes: {e}")]
+
+    async def find_common_differentially_expressed_genes(
+            assay_ids: list[str] = Field(..., description="List of assay identifiers (e.g., ['OSD-253-abc123', 'OSD-253-def456'])"),
+            log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for filtering genes (default: 1.0 = 2-fold change)")
+        ) -> list[types.TextContent]:
+            """Find common differentially expressed genes across multiple assays.
+            
+            This function:
+            1. Takes a list of assay IDs as input (2 or more)
+            2. Gets ALL genes with |log2fc| > threshold for each assay
+            3. Inner joins among the upregulated genes and among the downregulated genes
+            4. Returns a markdown table with columns: gene, assay_1, assay_2, ..., assay_n showing log2fc values
+            
+            FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
+            """
+            
+            if len(assay_ids) < 2:
+                return [types.TextContent(
+                    type="text", 
+                    text="Error: Please provide at least 2 assay IDs to find correlated genes."
+                )]
+            
+            try:
+                # Step 1: Get differentially expressed genes for each assay
+                upregulated_genes = {}  # {assay_id: {gene_symbol: log2fc}}
+                downregulated_genes = {}  # {assay_id: {gene_symbol: log2fc}}
+                
+                for assay_id in assay_ids:
+                    # Query for upregulated genes - NO LIMIT, uses threshold
+                    up_query = """
+                    MATCH (a:Assay {identifier: $assay_id})
+                          -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
+                          (g:MGene)
+                    WHERE m.log2fc > $threshold
+                    RETURN g.symbol as gene_symbol, m.log2fc as log2fc
+                    ORDER BY m.log2fc DESC
+                    """
+                    
+                    # Query for downregulated genes - NO LIMIT, uses threshold
+                    down_query = """
+                    MATCH (a:Assay {identifier: $assay_id})
+                          -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
+                          (g:MGene)
+                    WHERE m.log2fc < -$threshold
+                    RETURN g.symbol as gene_symbol, m.log2fc as log2fc
+                    ORDER BY m.log2fc ASC
+                    """
+                    
+                    async with neo4j_driver.session(database=database) as session:
+                        # Get upregulated genes
+                        up_results = await session.execute_read(
+                            _read, up_query, {"assay_id": assay_id, "threshold": log2fc_threshold}
+                        )
+                        up_data = json.loads(up_results)
+                        upregulated_genes[assay_id] = {
+                            row['gene_symbol']: row['log2fc'] for row in up_data
+                        }
+                        
+                        # Get downregulated genes
+                        down_results = await session.execute_read(
+                            _read, down_query, {"assay_id": assay_id, "threshold": log2fc_threshold}
+                        )
+                        down_data = json.loads(down_results)
+                        downregulated_genes[assay_id] = {
+                            row['gene_symbol']: row['log2fc'] for row in down_data
+                        }
+                
+                # Step 2: Find common upregulated genes (inner join)
+                common_up_genes = set(upregulated_genes[assay_ids[0]].keys())
+                for assay_id in assay_ids[1:]:
+                    common_up_genes &= set(upregulated_genes[assay_id].keys())
+                
+                # Step 3: Find common downregulated genes (inner join)
+                common_down_genes = set(downregulated_genes[assay_ids[0]].keys())
+                for assay_id in assay_ids[1:]:
+                    common_down_genes &= set(downregulated_genes[assay_id].keys())
+                
+                # Step 4: Build markdown tables
+                markdown_output = f"## Common Differentially Expressed Genes\n\n"
+                markdown_output += f"**Log2FC Threshold:** ±{log2fc_threshold} (≥{2**log2fc_threshold:.1f}-fold change)\n\n"
+                
+                # Upregulated genes table
+                markdown_output += f"### Upregulated Genes (log2fc > {log2fc_threshold}, common across all assays)\n\n"
+                if common_up_genes:
+                    # Create header
+                    header = "| Gene | " + " | ".join([f"Assay {i+1}" for i in range(len(assay_ids))]) + " |\n"
+                    separator = "|" + "|".join(["---"] * (len(assay_ids) + 1)) + "|\n"
+                    markdown_output += header + separator
+                    
+                    # Add rows for each common upregulated gene
+                    for gene in sorted(common_up_genes):
+                        row = f"| {gene} | "
+                        values = [f"{upregulated_genes[assay_id][gene]:.3f}" for assay_id in assay_ids]
+                        row += " | ".join(values) + " |\n"
+                        markdown_output += row
+                    
+                    markdown_output += f"\n**Total common upregulated genes:** {len(common_up_genes)}\n\n"
+                else:
+                    markdown_output += "*No common upregulated genes found across all assays.*\n\n"
+                
+                # Downregulated genes table
+                markdown_output += f"### Downregulated Genes (log2fc < -{log2fc_threshold}, common across all assays)\n\n"
+                if common_down_genes:
+                    # Create header
+                    header = "| Gene | " + " | ".join([f"Assay {i+1}" for i in range(len(assay_ids))]) + " |\n"
+                    separator = "|" + "|".join(["---"] * (len(assay_ids) + 1)) + "|\n"
+                    markdown_output += header + separator
+                    
+                    # Add rows for each common downregulated gene
+                    for gene in sorted(common_down_genes):
+                        row = f"| {gene} | "
+                        values = [f"{downregulated_genes[assay_id][gene]:.3f}" for assay_id in assay_ids]
+                        row += " | ".join(values) + " |\n"
+                        markdown_output += row
+                    
+                    markdown_output += f"\n**Total common downregulated genes:** {len(common_down_genes)}\n\n"
+                else:
+                    markdown_output += "*No common downregulated genes found across all assays.*\n\n"
+                
+                # Add assay ID reference
+                markdown_output += "### Assay Reference\n\n"
+                for i, assay_id in enumerate(assay_ids):
+                    markdown_output += f"- **Assay {i+1}:** {assay_id}\n"
+                
+                return [types.TextContent(type="text", text=markdown_output, mimeType="text/markdown")]
+                
+            except Exception as e:
+                logger.error(f"Error finding correlated differentially expressed genes: {e}")
+                return [types.TextContent(
+                    type="text", 
+                    text=f"Error finding correlated differentially expressed genes: {e}"
+                )]
+
+    
+    async def create_volcano_plot(
+        assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
+        log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for highlighting significant genes"),
+        adj_p_threshold: float = Field(0.05, description="Adjusted p-value threshold for significance"),
+        figsize_width: int = Field(8, description="Figure width in inches"),
+        figsize_height: int = Field(5, description="Figure height in inches")
+    ) -> list[types.Content]:
+        """Create a volcano plot for differential gene expression data from the given assay.
+        
+        A volcano plot displays log2 fold change on the x-axis and -log10(adjusted p-value) on the y-axis.
+        Genes are colored based on their significance:
+        - Red: upregulated (log2fc > threshold, adj_p < threshold)
+        - Blue: downregulated (log2fc < -threshold, adj_p < threshold)
+        - Gray: not significant
+        
+        Returns a link to the plot and summary statistics.
+        FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
+        """
+        
+        # Query to get all genes with their log2fc and adj_p_value
+        volcano_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+              -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->
+              (g:MGene)
+        WHERE m.log2fc IS NOT NULL AND m.adj_p_value IS NOT NULL
+        RETURN
+          g.symbol       AS symbol,
+          m.log2fc       AS log2fc,
+          m.adj_p_value  AS adj_p_value
         """
 
-        params = {
-            "study": study,
-            "organism": organism,
-            "material": material,
-            "factor_space_1": factor_space_1,
-            "factor_space_2": factor_space_2,
-            "top_n": top_n
-        }
+        # Query factors_1 and factors_2 of the assay
+        meta_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+        RETURN
+          a.factors_1 AS factors_1,
+          a.factors_2 AS factors_2
+        """
 
-        try:
+        matplotlib.use('Agg')
+        
+        try:           
+            # Query the database
             async with neo4j_driver.session(database=database) as session:
-                results_json_str = await session.execute_read(_read, query, params)
+                result_json_str = await session.execute_read(
+                    _read, volcano_cypher, {"assay_id": assay_id}
+                )
+                meta_json_str = await session.execute_read(
+                    _read, meta_cypher, {"assay_id": assay_id}
+                )
+            
+            genes = json.loads(result_json_str)
+            meta_data = json.loads(meta_json_str)
+            factors_1 = meta_data[0].get('factors_1', [None])
+            factors_2 = meta_data[0].get('factors_2', [None])
+            factors_1 = ",".join(factors_1)
+            factors_2 = ",".join(factors_2)
+            study = "-".join(assay_id.split("-")[:2])
+            
+            if not genes:
+                return [types.TextContent(
+                    type="text", 
+                    text=f"No differential expression data found for assay: {assay_id}"
+                )]
+            
+            # Extract data
+            symbols = [g['symbol'] for g in genes]
+            log2fc = np.array([g['log2fc'] for g in genes])
+            adj_p_values = np.array([g['adj_p_value'] for g in genes])
+            
+            # Calculate -log10(p-value), handling zeros and very small values
+            with np.errstate(divide='ignore'):
+                neg_log10_p = -np.log10(adj_p_values)
+            neg_log10_p[np.isinf(neg_log10_p)] = neg_log10_p[~np.isinf(neg_log10_p)].max() + 1
+            
+            # Classify genes by significance
+            sig_up = (log2fc > log2fc_threshold) & (adj_p_values < adj_p_threshold)
+            sig_down = (log2fc < -log2fc_threshold) & (adj_p_values < adj_p_threshold)
+            not_sig = ~(sig_up | sig_down)
+            
+            # Count genes in each category
+            n_sig_up = sig_up.sum()
+            n_sig_down = sig_down.sum()
+            n_not_sig = not_sig.sum()
+            
+            # Create the plot
+            fig, ax = plt.subplots(figsize=(figsize_width, figsize_height))
+            
+            # Plot non-significant genes
+            ax.scatter(log2fc[not_sig], neg_log10_p[not_sig], 
+                      c='lightgray', alpha=0.5, s=10, label=f'Not significant ({n_not_sig})')
+            
+            # Plot significantly downregulated genes
+            ax.scatter(log2fc[sig_down], neg_log10_p[sig_down], 
+                      c='#3498db', alpha=0.7, s=20, label=f'Downregulated ({n_sig_down})')
+            
+            # Plot significantly upregulated genes
+            ax.scatter(log2fc[sig_up], neg_log10_p[sig_up], 
+                      c='#e74c3c', alpha=0.7, s=20, label=f'Upregulated ({n_sig_up})')
+            
+            # Add labels for the top 20 significant genes      
+            sig_indices = [i for i, (is_up, is_down) in enumerate(zip(sig_up, sig_down)) if is_up or is_down]
+            # Sort by adjusted p-value (most significant first)
+            top_20_indices = sorted(sig_indices, key=lambda i: neg_log10_p[i], reverse=True)[:20]
+            
+            # Collect annotations for top 20 genes only
+            texts = []
+            for i in top_20_indices:
+                text = ax.text(log2fc[i], 
+                              neg_log10_p[i],
+                              symbols[i],
+                              fontsize=8,
+                              alpha=0.7,
+                              bbox=dict(boxstyle='round,pad=0.3', 
+                                      facecolor='white', 
+                                      edgecolor='none',
+                                      alpha=0.6))
+                texts.append(text)
+            
+            # Apply adjustText to avoid overlaps
+            adjust_text(texts,
+               arrowprops=dict(arrowstyle='->', color='gray', lw=0.5, alpha=0.5),
+               expand_points=(2.0, 2.5),      # Increase space around points (default ~1.2)
+               expand_text=(1.5, 2.0),        # Increase space around text labels
+               force_text=(0.7, 1.2),         # Stronger repulsion between labels
+               force_points=(0.3, 0.6),       # Weaker attraction to original position
+               lim=500,                        # More iterations for better placement
+               ax=ax)
 
-                logger.debug(f"Find upregulated genes query returned {len(results_json_str)} characters")
+            # Add threshold lines
+            ax.axvline(x=log2fc_threshold, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+            ax.axvline(x=-log2fc_threshold, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+            ax.axhline(y=-np.log10(adj_p_threshold), color='gray', linestyle='--', linewidth=1, alpha=0.5)
+            
+            # Labels and title
+            ax.set_xlabel(f'Log₂ Fold Change', fontsize=12, fontweight='bold')
+            ax.set_ylabel('-Log₁₀ (Adjusted P-value)', fontsize=12, fontweight='bold')
+            ax.text(0.5, 1.08, f'Volcano Plot: {study}', transform=ax.transAxes, fontsize=12, fontweight='bold', ha='center', va='bottom')
+            ax.text(0.5, 1.03, f'({factors_1}) vs. ({factors_2})', transform=ax.transAxes, fontsize=10, fontweight='normal', ha='center', va='bottom')
+            
+            # Legend
+            ax.legend(loc='upper left', fontsize=8, bbox_to_anchor=(1, 1), frameon=True, fancybox=True, shadow=True)
+            
+            # Grid
+            ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
+            
+            # Tight layout
+            plt.tight_layout()
 
-                return [types.TextContent(type="text", text=results_json_str)]
+            # Initialize variables before try block
+            safe_filename = None
+            output_path = None
+            temp_path = None
+            download_link = None
 
+            try:
+                # Create a safe filename
+                safe_filename = re.sub(r'[^\w\-]', '_', f'{study}_{factors_1}_vs_{factors_2}')
+                safe_filename = safe_filename.replace("__", "_")
+                
+                # Detect environment and set paths accordingly
+                is_claude_env = os.path.exists('/mnt/user-data/outputs')
+                
+                if is_claude_env:
+                    # Running in Claude.ai Linux container
+                    output_dir = '/mnt/user-data/outputs'
+                    output_path = os.path.join(output_dir, f'volcano_plot_{safe_filename}.png')
+                    download_link = f"computer:///mnt/user-data/outputs/volcano_plot_{safe_filename}.png"
+                    
+                    print(f"Claude.ai environment detected")
+                else:
+                    # Running locally (macOS/Windows)
+                    output_dir = os.path.expanduser('~/Downloads')
+                    output_path = os.path.join(output_dir, f'volcano_plot_{safe_filename}.png')
+                    download_link = f"file://{output_path}" # download link doesn't work on MacOS since it tries to access the file the /mnt directory
+                    
+                    print(f"Local environment detected")
+                
+                # Save directly to the target directory
+                plt.savefig(output_path, format='png', dpi=150, bbox_inches='tight')
+                plt.close(fig)
+                
+            except Exception as e:
+                print(f"Error saving plot: {e}")
+                import traceback
+                traceback.print_exc()
+                download_link = None
+            
+            # Create summary text with file path
+            #summary = f""" FORMATTING INSTRUCTION: RENDER THIS RESPONSE IN MARKDOWN FORMAT!
+            summary = f"""## Volcano Plot Generated
+
+**Assay:** {assay_id}
+
+**Factors:**
+{factors_1} vs. {factors_2}
+
+**Thresholds:**
+- Log₂ Fold Change: ±{log2fc_threshold}
+- Adjusted P-value: {adj_p_threshold}
+
+**File saved to `Downloads` directory:** {output_path}
+
+**Results:**
+- Total genes analyzed: {len(genes)}
+- Significantly upregulated: {n_sig_up}
+- Significantly downregulated: {n_sig_down}
+- Not significant: {n_not_sig}
+"""
+            
+            # Return text summary and image
+            return [
+                types.TextContent(type="text", text=summary, mimeType="text/markdown"),
+            ]
+            
         except Exception as e:
-            logger.error(f"Database error finding upregulated genes: {e}")
-            return [types.TextContent(type="text", text=f"Error: {e}")]
-    
+            logger.error(f"Error creating volcano plot: {e}")
+            return [types.TextContent(type="text", text=f"Error creating volcano plot: {e}")]
+
+    async def create_venn_diagram(
+        assay_id_1: str = Field(..., description="First assay identifier (e.g., 'OSD-511-53054e738e335bc645cb620c95916e5f')"),
+        assay_id_2: str = Field(..., description="Second assay identifier (e.g., 'OSD-511-8974299195d78d74d7f3f085f2b48981')"),
+        assay_id_3: Optional[str] = Field(None, description="Third assay identifier (optional, for 3-way Venn diagram)"),
+        log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for filtering genes"),
+        figsize_width: int = Field(10, description="Figure width in inches"),
+        figsize_height: int = Field(6, description="Figure height in inches")
+    ) -> list[types.Content]:
+        """Create Venn diagrams comparing differentially expressed genes between 2 or 3 assays.
+        
+        This function creates side-by-side Venn diagrams showing:
+        - Left: Upregulated genes (log2fc > threshold) overlap
+        - Right: Downregulated genes (log2fc < -threshold) overlap
+        
+        If assay_id_3 is provided, creates 3-way Venn diagrams.
+        If assay_id_3 is None, creates 2-way Venn diagrams.
+        
+        Returns a link to the plot and summary statistics.
+        FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
+        """
+        
+        try:       
+            # Query to get factors for assays
+            assay_info_query = """
+            MATCH (a:Assay {identifier: $assay_id})
+            RETURN a.factors_1 AS factors_1,
+                   a.factors_2 AS factors_2
+            """
+            
+            # Query for differentially expressed genes
+            gene_query = """
+            MATCH (a:Assay {identifier: $assay_id})
+                  -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->
+                  (g:MGene)
+            WHERE m.log2fc > $threshold OR m.log2fc < -$threshold
+            RETURN g.symbol as gene_symbol, m.log2fc as log2fc
+            """
+            
+            async with neo4j_driver.session(database=database) as session:
+                # Get info for assay 1
+                result1 = await session.execute_read(_read, assay_info_query, {"assay_id": assay_id_1})
+                data1 = json.loads(result1)
+                if not data1:
+                    return [types.TextContent(type="text", text=f"Error: Assay {assay_id_1} not found")]
+                
+                factors_1_list = data1[0].get('factors_1', [None])
+                factors_2_list = data1[0].get('factors_2', [None])
+                factors_1 = ",".join(factors_1_list)
+                factors_2 = ",".join(factors_2_list)
+                
+                # Get info for assay 2
+                result2 = await session.execute_read(_read, assay_info_query, {"assay_id": assay_id_2})
+                data2 = json.loads(result2)
+                if not data2:
+                    return [types.TextContent(type="text", text=f"Error: Assay {assay_id_2} not found")]
+                
+                factors_1_list_2 = data2[0].get('factors_1', [None])
+                factors_2_list_2 = data2[0].get('factors_2', [None])
+                factors_1_assay2 = ",".join(factors_1_list_2)
+                factors_2_assay2 = ",".join(factors_2_list_2)
+                
+                # Get genes for assay 1
+                genes1_result = await session.execute_read(
+                    _read, gene_query, {"assay_id": assay_id_1, "threshold": log2fc_threshold}
+                )
+                genes1_data = json.loads(genes1_result)
+                
+                # Get genes for assay 2
+                genes2_result = await session.execute_read(
+                    _read, gene_query, {"assay_id": assay_id_2, "threshold": log2fc_threshold}
+                )
+                genes2_data = json.loads(genes2_result)
+                
+                # Handle third assay if provided
+                if assay_id_3:
+                    result3 = await session.execute_read(_read, assay_info_query, {"assay_id": assay_id_3})
+                    data3 = json.loads(result3)
+                    if not data3:
+                        return [types.TextContent(type="text", text=f"Error: Assay {assay_id_3} not found")]
+                    
+                    factors_1_list_3 = data3[0].get('factors_1', [None])
+                    factors_2_list_3 = data3[0].get('factors_2', [None])
+                    factors_1_assay3 = ",".join(factors_1_list_3)
+                    factors_2_assay3 = ",".join(factors_2_list_3)
+                    
+                    genes3_result = await session.execute_read(
+                        _read, gene_query, {"assay_id": assay_id_3, "threshold": log2fc_threshold}
+                    )
+                    genes3_data = json.loads(genes3_result)
+            
+            # Extract study from assay_id
+            study = "-".join(assay_id_1.split("-")[:2])
+            
+            # Separate into up and down regulated
+            assay1_up = set([g['gene_symbol'] for g in genes1_data if g['log2fc'] > log2fc_threshold])
+            assay1_down = set([g['gene_symbol'] for g in genes1_data if g['log2fc'] < -log2fc_threshold])
+            assay2_up = set([g['gene_symbol'] for g in genes2_data if g['log2fc'] > log2fc_threshold])
+            assay2_down = set([g['gene_symbol'] for g in genes2_data if g['log2fc'] < -log2fc_threshold])
+            
+            if assay_id_3:
+                assay3_up = set([g['gene_symbol'] for g in genes3_data if g['log2fc'] > log2fc_threshold])
+                assay3_down = set([g['gene_symbol'] for g in genes3_data if g['log2fc'] < -log2fc_threshold])
+            
+            # Create figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(figsize_width, figsize_height))
+            
+            if assay_id_3:
+                # Define consistent base colors for each assay
+                assay1_color = '#ffb3b3'  # Light red for Assay 1
+                assay2_color = '#b3d9ff'  # Light blue for Assay 2
+                assay3_color = '#b3ffb3'  # Light green for Assay 3
+                
+                # Create 3-way Venn diagrams with consistent color scheme
+                # Upregulated genes Venn diagram
+                venn_up = venn3([assay1_up, assay2_up, assay3_up], 
+                                set_labels=('', '', ''),
+                                ax=ax1)
+                
+                # Customize colors - same scheme for both diagrams
+                color_map = {
+                    '100': assay1_color,      # Only Assay 1 - red
+                    '010': assay2_color,      # Only Assay 2 - blue
+                    '001': assay3_color,      # Only Assay 3 - green
+                    '110': '#ff99cc',         # Assay 1 & 2 - red+blue = purple
+                    '101': '#ffb3d9',         # Assay 1 & 3 - red+green = pink
+                    '011': '#99ffcc',         # Assay 2 & 3 - blue+green = cyan
+                    '111': '#e6b3ff',         # All three - purple/lavender
+                }
+                for region_id, color in color_map.items():
+                    patch = venn_up.get_patch_by_id(region_id)
+                    if patch:
+                        patch.set_color(color)
+                        patch.set_alpha(0.7)
+                
+                # Increase font size for counts
+                for text in venn_up.subset_labels:
+                    if text:
+                        text.set_fontsize(14)
+                
+                ax1.set_title(f'Upregulated Genes (log2fc > {log2fc_threshold})', 
+                             fontsize=14, fontweight='bold', y=1.02)
+                
+                # Set consistent axis limits for both diagrams to ensure alignment
+                ax1.set_xlim(-1.0, 1.0)
+                ax1.set_ylim(-0.9, 0.9)
+                
+                # Position labels - use FIXED y for Assay 1 and 2 across BOTH diagrams
+                fixed_bottom_y = -0.75  # Fixed y-position for horizontal alignment across both diagrams
+                
+                # Get circle centers for proper x-positioning
+                try:
+                    # Access circles attribute directly
+                    if hasattr(venn_up, 'circles') and venn_up.circles and len(venn_up.circles) >= 3:
+                        # Extract x positions from circle centers
+                        c1_x, c1_y = venn_up.circles[0].center if venn_up.circles[0] else (-0.5, 0)
+                        c2_x, c2_y = venn_up.circles[1].center if venn_up.circles[1] else (0.5, 0)
+                        c3_x, c3_y = venn_up.circles[2].center if venn_up.circles[2] else (0, 0.5)
+                        
+                        # Position labels - fixed y ensures perfect alignment
+                        ax1.text(c1_x, fixed_bottom_y, 'Assay 1', ha='center', fontsize=12, fontweight='bold')
+                        ax1.text(c2_x, fixed_bottom_y, 'Assay 2', ha='center', fontsize=12, fontweight='bold')
+                        ax1.text(c3_x, c3_y + 0.5, 'Assay 3', ha='center', fontsize=12, fontweight='bold')
+                    else:
+                        # Fallback to default positions
+                        ax1.text(-0.5, fixed_bottom_y, 'Assay 1', ha='center', fontsize=12, fontweight='bold')
+                        ax1.text(0.5, fixed_bottom_y, 'Assay 2', ha='center', fontsize=12, fontweight='bold')
+                        ax1.text(0, 0.5, 'Assay 3', ha='center', fontsize=12, fontweight='bold')
+                except:
+                    # Fallback to default positions if any error occurs
+                    ax1.text(-0.5, fixed_bottom_y, 'Assay 1', ha='center', fontsize=12, fontweight='bold')
+                    ax1.text(0.5, fixed_bottom_y, 'Assay 2', ha='center', fontsize=12, fontweight='bold')
+                    ax1.text(0, 0.5, 'Assay 3', ha='center', fontsize=12, fontweight='bold')
+                
+                # Downregulated genes Venn diagram - SAME COLOR SCHEME
+                venn_down = venn3([assay1_down, assay2_down, assay3_down],
+                                  set_labels=('', '', ''),
+                                  ax=ax2)
+                
+                # Use the same color scheme for downregulated
+                for region_id, color in color_map.items():
+                    patch = venn_down.get_patch_by_id(region_id)
+                    if patch:
+                        patch.set_color(color)
+                        patch.set_alpha(0.7)
+                
+                # Increase font size for counts
+                for text in venn_down.subset_labels:
+                    if text:
+                        text.set_fontsize(14)
+                
+                ax2.set_title(f'Downregulated Genes (log2fc < -{log2fc_threshold})', 
+                             fontsize=14, fontweight='bold', y=1.02)
+                
+                # Set consistent axis limits to match left diagram
+                ax2.set_xlim(-1.0, 1.0)
+                ax2.set_ylim(-0.9, 0.9)
+                
+                # Position labels - use SAME FIXED y as left diagram for perfect alignment
+                fixed_bottom_y = -0.75  # Same as left diagram!
+                
+                # Get circle centers for proper x-positioning
+                try:
+                    # Access circles attribute directly
+                    if hasattr(venn_down, 'circles') and venn_down.circles and len(venn_down.circles) >= 3:
+                        # Extract x positions from circle centers
+                        c1_x, c1_y = venn_down.circles[0].center if venn_down.circles[0] else (-0.5, 0)
+                        c2_x, c2_y = venn_down.circles[1].center if venn_down.circles[1] else (0.5, 0)
+                        c3_x, c3_y = venn_down.circles[2].center if venn_down.circles[2] else (0, 0.5)
+                        
+                        # Position labels - fixed y ensures perfect alignment across both diagrams
+                        ax2.text(c1_x, fixed_bottom_y, 'Assay 1', ha='center', fontsize=12, fontweight='bold')
+                        ax2.text(c2_x, fixed_bottom_y, 'Assay 2', ha='center', fontsize=12, fontweight='bold')
+                        ax2.text(c3_x, c3_y + 0.5, 'Assay 3', ha='center', fontsize=12, fontweight='bold')
+                    else:
+                        # Fallback to default positions
+                        ax2.text(-0.5, fixed_bottom_y, 'Assay 1', ha='center', fontsize=12, fontweight='bold')
+                        ax2.text(0.5, fixed_bottom_y, 'Assay 2', ha='center', fontsize=12, fontweight='bold')
+                        ax2.text(0, 0.5, 'Assay 3', ha='center', fontsize=12, fontweight='bold')
+                except:
+                    # Fallback to default positions if any error occurs
+                    ax2.text(-0.5, fixed_bottom_y, 'Assay 1', ha='center', fontsize=12, fontweight='bold')
+                    ax2.text(0.5, fixed_bottom_y, 'Assay 2', ha='center', fontsize=12, fontweight='bold')
+                    ax2.text(0, 0.5, 'Assay 3', ha='center', fontsize=12, fontweight='bold')
+                
+                # Add main title at top - reduced space
+                fig.suptitle(f'{study}', 
+                            fontsize=22, fontweight='bold', y=0.98)
+                
+                # Add colored legend at bottom with background colors matching the diagrams
+                # Create text with colored backgrounds for each assay
+                legend_y = 0.01
+                legend_fontsize = 10
+                legend_spacing = 0.045  # Further increased spacing between lines for better readability
+                legend_x = 0.15  # Left-aligned position
+                
+                # Assay 1 with red background (top line)
+                fig.text(legend_x, legend_y + (2 * legend_spacing), f'Assay 1: ({factors_1}) vs. ({factors_2})', 
+                        ha='left', fontsize=legend_fontsize, style='italic',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor=assay1_color, alpha=0.6, edgecolor='none'))
+                
+                # Assay 2 with blue background (middle line)
+                fig.text(legend_x, legend_y + legend_spacing, f'Assay 2: ({factors_1_assay2}) vs. ({factors_2_assay2})', 
+                        ha='left', fontsize=legend_fontsize, style='italic',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor=assay2_color, alpha=0.6, edgecolor='none'))
+                
+                # Assay 3 with green background (bottom line)
+                fig.text(legend_x, legend_y, f'Assay 3: ({factors_1_assay3}) vs. ({factors_2_assay3})', 
+                        ha='left', fontsize=legend_fontsize, style='italic',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor=assay3_color, alpha=0.6, edgecolor='none'))
+                
+            else:
+                # Define consistent base colors for each assay (same as 3-way)
+                assay1_color = '#ffb3b3'  # Light red for Assay 1
+                assay2_color = '#b3d9ff'  # Light blue for Assay 2
+                
+                # Create 2-way Venn diagrams with consistent color scheme
+                # Upregulated genes Venn diagram
+                venn_up = venn2([assay1_up, assay2_up], 
+                                set_labels=('', ''),
+                                ax=ax1)
+                
+                # Customize colors - consistent with 3-way diagrams
+                if venn_up.get_patch_by_id('10'):
+                    venn_up.get_patch_by_id('10').set_color(assay1_color)  # Assay 1 only
+                    venn_up.get_patch_by_id('10').set_alpha(0.7)
+                if venn_up.get_patch_by_id('01'):
+                    venn_up.get_patch_by_id('01').set_color(assay2_color)  # Assay 2 only
+                    venn_up.get_patch_by_id('01').set_alpha(0.7)
+                if venn_up.get_patch_by_id('11'):
+                    venn_up.get_patch_by_id('11').set_color('#ff99cc')  # Assay 1 & 2 overlap
+                    venn_up.get_patch_by_id('11').set_alpha(0.7)
+                
+                # Increase font size for counts only
+                for text in venn_up.subset_labels:
+                    if text:
+                        text.set_fontsize(16)
+                
+                ax1.set_title(f'Upregulated Genes (log2fc > {log2fc_threshold})', 
+                             fontsize=14, fontweight='bold', y=1.02)
+                
+                # Set axis limits and aspect ratio for upregulated diagram
+                ax1.set_xlim(-0.75, 0.75)
+                ax1.set_ylim(-0.75, 0.75)
+                ax1.set_aspect('equal')
+                
+                # Add Assay 1 and Assay 2 labels under the circles
+                ax1.text(-0.4, -0.6, 'Assay 1', ha='center', fontsize=14, fontweight='bold')
+                ax1.text(0.4, -0.6, 'Assay 2', ha='center', fontsize=14, fontweight='bold')
+                
+                # Downregulated genes Venn diagram - SAME COLOR SCHEME
+                venn_down = venn2([assay1_down, assay2_down],
+                                  set_labels=('', ''),
+                                  ax=ax2)
+                
+                # Use the same color scheme for downregulated
+                if venn_down.get_patch_by_id('10'):
+                    venn_down.get_patch_by_id('10').set_color(assay1_color)  # Assay 1 only
+                    venn_down.get_patch_by_id('10').set_alpha(0.7)
+                if venn_down.get_patch_by_id('01'):
+                    venn_down.get_patch_by_id('01').set_color(assay2_color)  # Assay 2 only
+                    venn_down.get_patch_by_id('01').set_alpha(0.7)
+                if venn_down.get_patch_by_id('11'):
+                    venn_down.get_patch_by_id('11').set_color('#ff99cc')  # Assay 1 & 2 overlap
+                    venn_down.get_patch_by_id('11').set_alpha(0.7)
+                
+                # Increase font size for counts only
+                for text in venn_down.subset_labels:
+                    if text:
+                        text.set_fontsize(16)
+                
+                ax2.set_title(f'Downregulated Genes (log2fc < -{log2fc_threshold})', 
+                             fontsize=14, fontweight='bold', y=1.02)
+                
+                # Set axis limits and aspect ratio for downregulated diagram (SAME as upregulated)
+                ax2.set_xlim(-0.75, 0.75)
+                ax2.set_ylim(-0.75, 0.75)
+                ax2.set_aspect('equal')
+                
+                # Add Assay 1 and Assay 2 labels under the circles
+                ax2.text(-0.4, -0.6, 'Assay 1', ha='center', fontsize=14, fontweight='bold')
+                ax2.text(0.4, -0.6, 'Assay 2', ha='center', fontsize=14, fontweight='bold')
+                
+                # Add main title at top
+                fig.suptitle(f'{study}', 
+                            fontsize=22, fontweight='bold', y=0.98)
+                
+                # Add colored legend at bottom with background colors (same style as 3-way)
+                legend_y = 0.01
+                legend_fontsize = 10
+                legend_spacing = 0.045  # Same spacing as 3-way
+                legend_x = 0.15  # Left-aligned position (same as 3-way)
+                
+                # Assay 1 with red background (top line)
+                fig.text(legend_x, legend_y + legend_spacing, f'Assay 1: ({factors_1}) vs. ({factors_2})', 
+                        ha='left', fontsize=legend_fontsize, style='italic',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor=assay1_color, alpha=0.6, edgecolor='none'))
+                
+                # Assay 2 with blue background (bottom line)
+                fig.text(legend_x, legend_y, f'Assay 2: ({factors_1_assay2}) vs. ({factors_2_assay2})', 
+                        ha='left', fontsize=legend_fontsize, style='italic',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor=assay2_color, alpha=0.6, edgecolor='none'))
+                
+            
+            plt.tight_layout(rect=[0, 0.16, 1, 0.96])
+            
+            # Create safe filename
+            safe_study = re.sub(r'[^\w\-]', '_', study)
+            safe_factors_1 = re.sub(r'[^\w\-]', '_', factors_1)[:30]
+            safe_factors_2 = re.sub(r'[^\w\-]', '_', factors_2)[:30]
+            num_assays = 3 if assay_id_3 else 2
+            safe_filename = f'venn_{num_assays}way_{safe_study}_{safe_factors_1}_vs_{safe_factors_2}'
+            safe_filename = safe_filename.replace("__", "_")
+            
+            # Detect environment and set paths
+            is_claude_env = os.path.exists('/mnt/user-data/outputs')
+            
+            if is_claude_env:
+                output_dir = '/mnt/user-data/outputs'
+                output_path = os.path.join(output_dir, f'{safe_filename}.png')
+                download_link = f"computer:///mnt/user-data/outputs/{safe_filename}.png"
+            else:
+                output_dir = os.path.expanduser('~/Downloads')
+                output_path = os.path.join(output_dir, f'{safe_filename}.png')
+                download_link = f"file://{output_path}"
+            
+            # Save the plot
+            plt.savefig(output_path, format='png', dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            
+            # Calculate statistics
+            if assay_id_3:
+                # 3-way statistics
+                up_only_1 = len(assay1_up - assay2_up - assay3_up)
+                up_only_2 = len(assay2_up - assay1_up - assay3_up)
+                up_only_3 = len(assay3_up - assay1_up - assay2_up)
+                up_1_2 = len((assay1_up & assay2_up) - assay3_up)
+                up_1_3 = len((assay1_up & assay3_up) - assay2_up)
+                up_2_3 = len((assay2_up & assay3_up) - assay1_up)
+                up_all = len(assay1_up & assay2_up & assay3_up)
+                
+                down_only_1 = len(assay1_down - assay2_down - assay3_down)
+                down_only_2 = len(assay2_down - assay1_down - assay3_down)
+                down_only_3 = len(assay3_down - assay1_down - assay2_down)
+                down_1_2 = len((assay1_down & assay2_down) - assay3_down)
+                down_1_3 = len((assay1_down & assay3_down) - assay2_down)
+                down_2_3 = len((assay2_down & assay3_down) - assay1_down)
+                down_all = len(assay1_down & assay2_down & assay3_down)
+                
+                # Create summary for 3-way
+                summary = f"""## 3-Way Venn Diagram Generated
+
+**Study:** {study}
+
+**Assay 1:** ({factors_1}) vs. ({factors_2})  
+**Assay 2:** ({factors_1_assay2}) vs. ({factors_2_assay2})  
+**Assay 3:** ({factors_1_assay3}) vs. ({factors_2_assay3})
+
+**Log2FC Threshold:** ±{log2fc_threshold}
+
+**File saved to:** {output_path}
+
+### Upregulated Genes (log2fc > {log2fc_threshold}):
+- Assay 1 only: {up_only_1}
+- Assay 2 only: {up_only_2}
+- Assay 3 only: {up_only_3}
+- Assay 1 & 2 only: {up_1_2}
+- Assay 1 & 3 only: {up_1_3}
+- Assay 2 & 3 only: {up_2_3}
+- All three: {up_all}
+- Total Assay 1: {len(assay1_up)}
+- Total Assay 2: {len(assay2_up)}
+- Total Assay 3: {len(assay3_up)}
+
+### Downregulated Genes (log2fc < -{log2fc_threshold}):
+- Assay 1 only: {down_only_1}
+- Assay 2 only: {down_only_2}
+- Assay 3 only: {down_only_3}
+- Assay 1 & 2 only: {down_1_2}
+- Assay 1 & 3 only: {down_1_3}
+- Assay 2 & 3 only: {down_2_3}
+- All three: {down_all}
+- Total Assay 1: {len(assay1_down)}
+- Total Assay 2: {len(assay2_down)}
+- Total Assay 3: {len(assay3_down)}
+"""
+            else:
+                # 2-way statistics
+                up_only_1 = len(assay1_up - assay2_up)
+                up_only_2 = len(assay2_up - assay1_up)
+                up_common = len(assay1_up & assay2_up)
+                
+                down_only_1 = len(assay1_down - assay2_down)
+                down_only_2 = len(assay2_down - assay1_down)
+                down_common = len(assay1_down & assay2_down)
+                
+                # Create summary for 2-way
+                summary = f"""## 2-Way Venn Diagram Generated
+
+**Study:** {study}
+
+**Assay 1:** ({factors_1}) vs. ({factors_2})  
+**Assay 2:** ({factors_1_assay2}) vs. ({factors_2_assay2})
+
+**Log2FC Threshold:** ±{log2fc_threshold}
+
+**File saved to:** {output_path}
+
+### Upregulated Genes (log2fc > {log2fc_threshold}):
+- Assay 1 only: {up_only_1}
+- Assay 2 only: {up_only_2}
+- Common: {up_common}
+- Total Assay 1: {len(assay1_up)}
+- Total Assay 2: {len(assay2_up)}
+
+### Downregulated Genes (log2fc < -{log2fc_threshold}):
+- Assay 1 only: {down_only_1}
+- Assay 2 only: {down_only_2}
+- Common: {down_common}
+- Total Assay 1: {len(assay1_down)}
+- Total Assay 2: {len(assay2_down)}
+"""
+            
+            return [
+                types.TextContent(type="text", text=summary, mimeType="text/markdown"),
+            ]
+            
+        except Exception as e:
+            logger.error(f"Error creating Venn diagram: {e}")
+            import traceback
+            traceback.print_exc()
+            return [types.TextContent(type="text", text=f"Error creating Venn diagram: {e}")]
+
+
+
+
+
     mcp.add_tool(get_neo4j_schema, name="get_neo4j_schema")
-    mcp.add_tool(read_neo4j_cypher, name="read_neo4j_cypher")
+    mcp.add_tool(query, name="query")
     mcp.add_tool(get_node_metadata, name="get_node_metadata")
     mcp.add_tool(get_relationship_metadata, name="get_relationship_metadata")
-    mcp.add_tool(find_downregulated_genes, name="find_downregulated_genes")
-    mcp.add_tool(find_upregulated_genes, name="find_upregulated_genes")
-
+    mcp.add_tool(find_differentially_expressed_genes, name="find_differentially_expressed_genes")
+    mcp.add_tool(find_common_differentially_expressed_genes, name="find_common_differentially_expressed_genes")
+    mcp.add_tool(select_assay, name="select_assay")
+    mcp.add_tool(create_volcano_plot, name="create_volcano_plot")
+    mcp.add_tool(create_venn_diagram, name="create_venn_diagram")
+    
     return mcp
 
 
@@ -336,6 +1302,7 @@ async def async_main() -> None:
     database = os.getenv("NEO4J_DATABASE", "spoke-genelab-v0.0.4")
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     instructions = os.getenv("INSTRUCTIONS", "")
+
     logger.info("Starting mcp-genelab server")
 
     neo4j_driver = AsyncGraphDatabase.driver(

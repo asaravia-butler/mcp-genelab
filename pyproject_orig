@@ -13,10 +13,6 @@ dependencies = [
     "mcp>=1.6.0",
     "neo4j>=5.26.0",
     "pydantic>=2.10.1",
-    "numpy",
-    "matplotlib",
-    "matplotlib-venn",
-    "adjusttext",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -35,15 +31,5 @@ Issues = "https://github.com/sbl-sdsc/mcp-genelab/issues"
 [project.scripts]
 mcp-genelab = "mcp_genelab.server:main"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/mcp_genelab"]
-
-[tool.uv]
-package = true
-
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src"] 

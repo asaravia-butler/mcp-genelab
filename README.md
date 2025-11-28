@@ -1,4 +1,4 @@
-# MCP GeneLab Server
+        "INSTRUCTIONS": "Query the Spoke KG for human biomedical data, including genes, proteins, compounds, symptoms, and diseases."# MCP GeneLab Server
 
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -129,25 +129,25 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
    ```json
    {
      "mcpServers": {
-      "genelab-local-cypher": {
+      "genelab-local": {
          "command": "uvx",
          "args": ["mcp-genelab"],
          "env": {
            "NEO4J_URI": "bolt://localhost:7687",
            "NEO4J_USERNAME": "neo4j",
            "NEO4J_PASSWORD": "neo4jdemo",
-           "NEO4J_DATABASE": "spoke-genelab-v0.0.4",
+           "NEO4J_DATABASE": "spoke-genelab-v0.0.5",
            "INSTRUCTIONS": "Query the GeneLab Knowledge Graph to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics) and DNA methylation (epigenomics) data."
          }
        },
-       "genelab-remote-cypher": {
+       "genelab": {
          "command": "uvx",
          "args": ["mcp-genelab"],
          "env": {
            "NEO4J_URI": "bolt://remote_url:7687",
            "NEO4J_USERNAME": "username",
            "NEO4J_PASSWORD": "password",
-           "NEO4J_DATABASE": "spoke-genelab-v0.0.4",
+           "NEO4J_DATABASE": "spoke-genelab-v0.0.5",
            "INSTRUCTIONS": "Query the GeneLab Knowledge Graph to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics) and DNA methylation (epigenomics) data."
          }
       }
@@ -221,7 +221,7 @@ To direct a query to a specific MCP server, use the @ operator followed by the s
 For example:
 
 ```
-@genelab-remote-cypher
+@genelab
 ```
 See [response](docs/examples.md#Query-1).
 
@@ -230,7 +230,7 @@ See [response](docs/examples.md#Query-1).
 You can also perform federated queries across multiple MCP servers.
 
 ```
-@genelab-remote-cypher @spokeokn-remote-cypher
+@genelab @spokehuman
 ```
 
 This will execute the query across both servers and combine the results as applicable.
@@ -239,7 +239,7 @@ See [response](docs/examples.md#Query-2).
 
 3. **Node Metadata**
 ```
-Describe the Assay node and its properties in @genelab-remote-cypher, and include an example for a ground control vs. space flight comparison.
+Describe the Assay node and its properties in @genelab, and include an example for a ground control vs. space flight comparison.
 ```
 See [response](docs/examples.md#Query-3).
 
@@ -255,11 +255,11 @@ Give a breakdown of missions, studies, and the type of technologies used in the 
  ```
 See [response](docs/examples.md#Query-5).
 
-6. **Find upregulated genes in space flight:**
+6. **Differential Expression Analysis with MCP tools:**
 ```
-Find the top 5 upregulated genes in mouse liver tissue during Space Flight.
+Analyze the differential expression data for GeneLab study OSD-244.
 ```
-See [response](docs/examples.md#Query-6).
+See [response](docs/differential_expression_analysis.md).
 
 ## Development
 
@@ -274,6 +274,16 @@ cd mcp-genelab
 
 # Install dependencies
 uv sync
+
+# Test the MCP server locally (optional - press Ctrl-C to stop) 
+uv run mcp-genelab
+
+# Copy the dev configuration file to the Claude Desktop configuration directory
+cp /tmp/claude_desktop_config_dev.json "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+
+# update the configuration, replacing `/full/path/to/mcp-genelab` with your actual repository path.
+
+# Restart Claude Desktop
 ```
 
 ### Building and Publishing (maintainers only)
@@ -300,6 +310,12 @@ For testing, add the following parameters to the `args` option.
 
 # Publish to PyPI 
 uv publish --token pypi-YOUR_PYPI_TOKEN_HERE
+
+# Clear uv cache (optional)
+uv cache clean
+
+# Remove cached tool installation (optional)
+rm -rf ~/.local/share/uv/tools/mcp-genelab
 ```
 
 ---
@@ -320,7 +336,7 @@ Lists all nodes, their attributes, and their relationships to other nodes in the
 
 **Note:** If this fails with a message that includes "Neo.ClientError.Procedure.ProcedureNotFound", the APOC plugin needs to be installed and enabled on the Neo4j database.
 
-#### `read_neo4j_cypher`
+#### `query`
 
 Executes a read-only Cypher query on the Neo4j database.
 
@@ -338,6 +354,8 @@ WHERE s.organism = $organism
 RETURN s.name, a.name
 LIMIT 10
 ```
+
+**Note:** Only read queries (MATCH) are allowed. Write queries (MERGE, CREATE, SET, DELETE, REMOVE, ADD) will raise a ValueError.
 
 #### `get_node_metadata`
 
@@ -357,39 +375,115 @@ Retrieves descriptions of properties for all relationship types in the knowledge
 - None
 
 **Returns:**
-- JSON array containing descriptions of each relationship type and their properties
+- JSON array containing descriptions of each relationship type and their properties. Uses fallback approaches if MetaRelationship nodes are not available.
 
-#### `find_upregulated_genes`
+#### `find_differentially_expressed_genes`
 
-Finds genes that are upregulated in spaceflight conditions compared to ground control for a specific organism and tissue/organ/cell type.
-
-**Parameters:**
-- `organism` (string, required): The organism to search for (e.g., 'Mus musculus', 'Rattus norvegicus')
-- `material` (string, required): The organ, tissue, or cell type to search for (e.g., 'liver', 'hippocampus', 'skeletal muscle')
-- `factor_space_1` (string, optional): First experimental grouping, default: 'Ground Control'
-- `factor_space_2` (string, optional): Second experimental grouping, default: 'Space Flight'
-- `top_n` (integer, optional): Number of top upregulated genes to return, default: 100
-
-**Returns:**
-- JSON array of upregulated genes with symbols, log2 fold changes, adjusted p-values, and assay information
-
-**Note:** Only compares experiments with matching experimental factors to ensure valid comparisons.
-
-#### `find_downregulated_genes`
-
-Finds genes that are downregulated in spaceflight conditions compared to ground control for a specific organism and tissue/organ/cell type.
+Returns the top-N upregulated and downregulated genes for a given assay.
 
 **Parameters:**
-- `organism` (string, required): The organism to search for (e.g., 'Mus musculus', 'Rattus norvegicus')
-- `material` (string, required): The organ, tissue, or cell type to search for (e.g., 'liver', 'hippocampus', 'skeletal muscle')
-- `factor_space_1` (string, optional): First experimental grouping, default: 'Ground Control'
-- `factor_space_2` (string, optional): Second experimental grouping, default: 'Space Flight'
-- `top_n` (integer, optional): Number of top downregulated genes to return, default: 100
+- `assay_id` (string, required): Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')
+- `top_n` (integer, optional): Number of genes to return for each of up- and down-regulated lists, default: 5
 
 **Returns:**
-- JSON array of downregulated genes with symbols, log2 fold changes, adjusted p-values, and assay information
+- Markdown-formatted table containing:
+  - Top-N upregulated genes (log2fc > 0, sorted highest first)
+  - Top-N downregulated genes (log2fc < 0, sorted lowest first)
+  - Gene symbols, log2 fold changes, and adjusted p-values
 
-**Note:** Only compares experiments with matching experimental factors to ensure valid comparisons.
+#### `find_common_differentially_expressed_genes`
+
+Finds common differentially expressed genes across multiple assays.
+
+**Parameters:**
+- `assay_ids` (array of strings, required): List of assay identifiers to compare (e.g., ['OSD-253-abc123', 'OSD-253-def456'])
+- `log2fc_threshold` (number, optional): Log2 fold change threshold for filtering genes, default: 1.0 (represents 2-fold change)
+
+**Returns:**
+- Markdown-formatted tables showing:
+  - Common upregulated genes across all assays with log2fc values for each assay
+  - Common downregulated genes across all assays with log2fc values for each assay
+
+**Process:**
+1. Gets ALL genes with |log2fc| > threshold for each assay
+2. Performs inner join among upregulated genes and among downregulated genes
+3. Returns genes that are differentially expressed in the same direction across all assays
+
+#### `select_assay`
+
+Interactive tool for selecting assays for a study, rendered in markdown format.
+
+**Parameters:**
+- `study_id` (string, optional): Study identifier (e.g., 'OSD-253')
+- `selection` (string, optional): Comma-separated list of indices for selection (e.g., '1,2,3,4')
+
+**Returns:**
+- **First call** (selection=None): 
+  - Prompts for study_id if missing
+  - Returns numbered menu as markdown table showing unique factor combinations across all assays
+- **Second call** (with selection): 
+  - Pairs consecutive indices: (i,j), (k,l), ..., (m,n)
+  - Returns assay_id(s) for each pair comparison
+  - Must provide an even number of indices
+
+**Usage Pattern:**
+1. Call without parameters to see available factor combinations
+2. Select pairs of conditions to compare
+3. Use returned assay_ids with other tools
+
+#### `create_volcano_plot`
+
+Creates a volcano plot for differential gene expression data from a given assay.
+
+**Parameters:**
+- `assay_id` (string, required): Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')
+- `log2fc_threshold` (number, optional): Log2 fold change threshold for highlighting significant genes, default: 1.0
+- `adj_p_threshold` (number, optional): Adjusted p-value threshold for significance, default: 0.05
+- `figsize_width` (integer, optional): Figure width in inches, default: 8
+- `figsize_height` (integer, optional): Figure height in inches, default: 5
+
+**Returns:**
+- File name of generated the volcano plot image (see Downloads folder)
+- Markdown-formatted summary with:
+  - Study information
+  - Factor comparison details
+  - Thresholds used
+  - Count statistics for significant genes
+
+**Visualization:**
+- X-axis: log2 fold change
+- Y-axis: -log10(adjusted p-value)
+- Color coding:
+  - Red: upregulated genes (log2fc > threshold, adj_p < threshold)
+  - Blue: downregulated genes (log2fc < -threshold, adj_p < threshold)
+  - Gray: not significant
+
+#### `create_venn_diagram`
+
+Creates Venn diagrams comparing differentially expressed genes between 2 or 3 assays.
+
+**Parameters:**
+- `assay_id_1` (string, required): First assay identifier (e.g., 'OSD-511-53054e738e335bc645cb620c95916e5f')
+- `assay_id_2` (string, required): Second assay identifier (e.g., 'OSD-511-8974299195d78d74d7f3f085f2b48981')
+- `assay_id_3` (string, optional): Third assay identifier for 3-way Venn diagram
+- `log2fc_threshold` (number, optional): Log2 fold change threshold for filtering genes, default: 1.0
+- `figsize_width` (integer, optional): Figure width in inches, default: 10
+- `figsize_height` (integer, optional): Figure height in inches, default: 6
+
+**Returns:**
+- File name of the generated Venn diagram image (see Downloads folder)
+- Markdown-formatted summary with:
+  - Study information
+  - Assay comparisons (factor combinations)
+  - Overlap statistics for upregulated genes
+  - Overlap statistics for downregulated genes
+
+**Visualization:**
+- Side-by-side Venn diagrams:
+  - Left: Upregulated genes (log2fc > threshold)
+  - Right: Downregulated genes (log2fc < -threshold)
+- Supports 2-way or 3-way comparisons
+- Color-coded assay legends with factor information
 
 ### Command Line Interface
 
