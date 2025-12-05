@@ -295,6 +295,9 @@ uv version --bump minor
 # Build the package
 uv build
 
+# Remove distributions for previous versions
+rm -rf dist
+
 # Publish to TestPyPI first (recommended)
 uv publish --publish-url https://test.pypi.org/legacy/ --token pypi-YOUR_TEST_PYPI_TOKEN_HERE
 

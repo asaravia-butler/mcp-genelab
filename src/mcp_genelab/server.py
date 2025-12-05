@@ -188,11 +188,11 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Database error retrieving relationship metadata: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def select_assay(
+    async def select_assays(
         study_id: Optional[str] = None,
         selection: Optional[str] = None
     ) -> list[types.Content]:
-        """Select assay for a study and render the response in markdown format.
+        """List and select assays for a study and render the response in markdown format.
         
         First call (selection=None):
         - If study_id missing, prompt for one (e.g., 'OSD-253').
@@ -225,7 +225,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 res = await session.run(cypher, {"study_id": study_id})
                 rows = await res.data()
         except Exception as e:
-            logger.exception("select_assay query failed")
+            logger.exception("select_assays query failed")
             return [types.TextContent(type="text", text=f"Error querying study '{study_id}': {e}")]
 
         if not rows:
@@ -355,7 +355,9 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             lines.append("1. Find differentially expressed genes for each comparison")
             lines.append("2. Create volcano plots for individual comparisons")
             lines.append("3. Identify genes that show consistent changes across comparisons")
-            lines.append("4. **Create correlation plot** to compare gene expression patterns across conditions")
+
+        if len(pairs) < 4:
+            lines.append("4. Create a venn diagram to show overlap of common differentially expressed genes")
         
         return [
             types.TextContent(type="text", text="\n".join(lines), mimeType="text/markdown"),
@@ -455,7 +457,8 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 
     async def find_common_differentially_expressed_genes(
             assay_ids: list[str] = Field(..., description="List of assay identifiers (e.g., ['OSD-253-abc123', 'OSD-253-def456'])"),
-            log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for filtering genes (default: 1.0 = 2-fold change)")
+            log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for filtering genes (default: 1.0 = 2-fold change)"),
+            adj_p_threshold: float = Field(0.05, description="Adjusted p-value threshold for significance (default: 0.05, max value: 0.1)")
         ) -> list[types.TextContent]:
             """Find common differentially expressed genes across multiple assays.
             
@@ -485,7 +488,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     MATCH (a:Assay {identifier: $assay_id})
                           -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
                           (g:MGene)
-                    WHERE m.log2fc > $threshold
+                    WHERE m.log2fc > $log2fc_threshold and m.adj_p_value < $adj_p_threshold
                     RETURN g.symbol as gene_symbol, m.log2fc as log2fc
                     ORDER BY m.log2fc DESC
                     """
@@ -495,7 +498,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     MATCH (a:Assay {identifier: $assay_id})
                           -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
                           (g:MGene)
-                    WHERE m.log2fc < -$threshold
+                    WHERE m.log2fc < -$log2fc_threshold and m.adj_p_value < $adj_p_threshold
                     RETURN g.symbol as gene_symbol, m.log2fc as log2fc
                     ORDER BY m.log2fc ASC
                     """
@@ -503,7 +506,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     async with neo4j_driver.session(database=database) as session:
                         # Get upregulated genes
                         up_results = await session.execute_read(
-                            _read, up_query, {"assay_id": assay_id, "threshold": log2fc_threshold}
+                            _read, up_query, {"assay_id": assay_id, "log2fc_threshold": log2fc_threshold, "adj_p_threshold": adj_p_threshold}
                         )
                         up_data = json.loads(up_results)
                         upregulated_genes[assay_id] = {
@@ -512,7 +515,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                         
                         # Get downregulated genes
                         down_results = await session.execute_read(
-                            _read, down_query, {"assay_id": assay_id, "threshold": log2fc_threshold}
+                            _read, down_query, {"assay_id": assay_id, "log2fc_threshold": log2fc_threshold, "adj_p_threshold": adj_p_threshold}
                         )
                         down_data = json.loads(down_results)
                         downregulated_genes[assay_id] = {
@@ -531,7 +534,8 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 
                 # Step 4: Build markdown tables
                 markdown_output = f"## Common Differentially Expressed Genes\n\n"
-                markdown_output += f"**Log2FC Threshold:** ±{log2fc_threshold} (≥{2**log2fc_threshold:.1f}-fold change)\n\n"
+                markdown_output += f"**Log2FC Threshold:** ±{log2fc_threshold} (≥{2**log2fc_threshold:.1f}-fold change)"
+                markdown_output += f"**Adjusted p-value Threshold:** {adj_p_threshold}\n\n"
                 
                 # Upregulated genes table
                 markdown_output += f"### Upregulated Genes (log2fc > {log2fc_threshold}, common across all assays)\n\n"
@@ -590,6 +594,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
         log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for highlighting significant genes"),
         adj_p_threshold: float = Field(0.05, description="Adjusted p-value threshold for significance"),
+        top_n: int = Field(20, description="How many significant genes to label in the plot"),
         figsize_width: int = Field(8, description="Figure width in inches"),
         figsize_height: int = Field(5, description="Figure height in inches")
     ) -> list[types.Content]:
@@ -686,14 +691,14 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             ax.scatter(log2fc[sig_up], neg_log10_p[sig_up], 
                       c='#e74c3c', alpha=0.7, s=20, label=f'Upregulated ({n_sig_up})')
             
-            # Add labels for the top 20 significant genes      
+            # Add labels for the top n significant genes      
             sig_indices = [i for i, (is_up, is_down) in enumerate(zip(sig_up, sig_down)) if is_up or is_down]
             # Sort by adjusted p-value (most significant first)
-            top_20_indices = sorted(sig_indices, key=lambda i: neg_log10_p[i], reverse=True)[:20]
+            top_n_indices = sorted(sig_indices, key=lambda i: neg_log10_p[i], reverse=True)[:top_n]
             
-            # Collect annotations for top 20 genes only
+            # Collect annotations for top n genes only
             texts = []
-            for i in top_20_indices:
+            for i in top_n_indices:
                 text = ax.text(log2fc[i], 
                               neg_log10_p[i],
                               symbols[i],
@@ -707,7 +712,14 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             
             # Apply adjustText to avoid overlaps
             adjust_text(texts,
-               arrowprops=dict(arrowstyle='->', color='gray', lw=0.5, alpha=0.5),
+               arrowprops=dict(arrowstyle='->', 
+                               color='gray', 
+                               lw=0.5, 
+                               alpha=0.7,
+                               shrinkA=0,     # don't shrink arrow near annotation
+                               shrinkB=2,     # minimal shrink at the point (larger → shorter arrow)
+                               relpos=(0.5, 0.5)  # improves arrow connection positioning
+                              ),
                expand_points=(2.0, 2.5),      # Increase space around points (default ~1.2)
                expand_text=(1.5, 2.0),        # Increase space around text labels
                force_text=(0.7, 1.2),         # Stronger repulsion between labels
@@ -723,7 +735,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             # Labels and title
             ax.set_xlabel(f'Log₂ Fold Change', fontsize=12, fontweight='bold')
             ax.set_ylabel('-Log₁₀ (Adjusted P-value)', fontsize=12, fontweight='bold')
-            ax.text(0.5, 1.08, f'Volcano Plot: {study}', transform=ax.transAxes, fontsize=12, fontweight='bold', ha='center', va='bottom')
+            ax.text(0.5, 1.08, f'Volano Plot: {study}', transform=ax.transAxes, fontsize=12, fontweight='bold', ha='center', va='bottom')
             ax.text(0.5, 1.03, f'({factors_1}) vs. ({factors_2})', transform=ax.transAxes, fontsize=10, fontweight='normal', ha='center', va='bottom')
             
             # Legend
@@ -754,15 +766,11 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     output_dir = '/mnt/user-data/outputs'
                     output_path = os.path.join(output_dir, f'volcano_plot_{safe_filename}.png')
                     download_link = f"computer:///mnt/user-data/outputs/volcano_plot_{safe_filename}.png"
-                    
-                    print(f"Claude.ai environment detected")
                 else:
                     # Running locally (macOS/Windows)
                     output_dir = os.path.expanduser('~/Downloads')
                     output_path = os.path.join(output_dir, f'volcano_plot_{safe_filename}.png')
-                    download_link = f"file://{output_path}" # download link doesn't work on MacOS since it tries to access the file the /mnt directory
-                    
-                    print(f"Local environment detected")
+                    download_link = f"file://{output_path}" # download link doesn't work on MacOS since it tries to access the file in the /mnt directory
                 
                 # Save directly to the target directory
                 plt.savefig(output_path, format='png', dpi=150, bbox_inches='tight')
@@ -775,7 +783,6 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 download_link = None
             
             # Create summary text with file path
-            #summary = f""" FORMATTING INSTRUCTION: RENDER THIS RESPONSE IN MARKDOWN FORMAT!
             summary = f"""## Volcano Plot Generated
 
 **Assay:** {assay_id}
@@ -796,9 +803,10 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 - Not significant: {n_not_sig}
 """
             
-            # Return text summary and image
+            # Return text summary
             return [
                 types.TextContent(type="text", text=summary, mimeType="text/markdown"),
+                types.TextContent(type="text", text="INSTRUCTION: Do not show an 'Open in Preview' button or 'View link', display the output path only"),
             ]
             
         except Exception as e:
@@ -1204,7 +1212,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 
 **Log2FC Threshold:** ±{log2fc_threshold}
 
-**File saved to:** {output_path}
+**File saved to `Downloads` directory:** {output_path}
 
 ### Upregulated Genes (log2fc > {log2fc_threshold}):
 - Assay 1 only: {up_only_1}
@@ -1269,6 +1277,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             
             return [
                 types.TextContent(type="text", text=summary, mimeType="text/markdown"),
+                types.TextContent(type="text", text="INSTRUCTION: Do not show an 'Open in Preview' button or 'View link', display the output path only"),
             ]
             
         except Exception as e:
@@ -1287,7 +1296,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
     mcp.add_tool(get_relationship_metadata, name="get_relationship_metadata")
     mcp.add_tool(find_differentially_expressed_genes, name="find_differentially_expressed_genes")
     mcp.add_tool(find_common_differentially_expressed_genes, name="find_common_differentially_expressed_genes")
-    mcp.add_tool(select_assay, name="select_assay")
+    mcp.add_tool(select_assays, name="select_assays")
     mcp.add_tool(create_volcano_plot, name="create_volcano_plot")
     mcp.add_tool(create_venn_diagram, name="create_venn_diagram")
     
