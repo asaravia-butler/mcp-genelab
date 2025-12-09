@@ -349,15 +349,16 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             # Single pair - standard analysis
             lines.append("1. Find differentially expressed genes")
             lines.append("2. Create a volcano plot")
-            lines.append("3. Perform pathway enrichment analysis")
+            lines.append("3. Map differentially expressed genes to pathways, gene and protein function, diseases, etc., using the `humanspoke` (human) KG or `spoke` KG (human + bacterial genes) MCP services.")
         else:
             # Multiple pairs - suggest comparative analysis
             lines.append("1. Find differentially expressed genes for each comparison")
             lines.append("2. Create volcano plots for individual comparisons")
             lines.append("3. Identify genes that show consistent changes across comparisons")
+            lines.append("4. Map differentially expressed genes to pathways, gene and protein function, diseases, etc., using the `humanspoke` (human) KG or `spoke` KG (human + bacterial genes) MCP services")
 
         if len(pairs) < 4:
-            lines.append("4. Create a venn diagram to show overlap of common differentially expressed genes")
+            lines.append("5. Create a venn diagram to show overlap of common differentially expressed genes")
         
         return [
             types.TextContent(type="text", text="\n".join(lines), mimeType="text/markdown"),
@@ -449,6 +450,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
     
             return [
                 types.TextContent(type="text", text=human, mimeType="text/markdown"),
+                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
             ]
     
         except Exception as e:
@@ -469,6 +471,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             4. Returns a markdown table with columns: gene, assay_1, assay_2, ..., assay_n showing log2fc values
             
             FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
+            INFORM THE USER ABOUT CURRENT THRESHOLDS AND THAT THEY CAN BE CHANGED.
             """
             
             if len(assay_ids) < 2:
@@ -580,7 +583,8 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 for i, assay_id in enumerate(assay_ids):
                     markdown_output += f"- **Assay {i+1}:** {assay_id}\n"
                 
-                return [types.TextContent(type="text", text=markdown_output, mimeType="text/markdown")]
+                return [types.TextContent(type="text", text=markdown_output, mimeType="text/markdown"),
+                        types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),]
                 
             except Exception as e:
                 logger.error(f"Error finding correlated differentially expressed genes: {e}")
@@ -807,6 +811,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             return [
                 types.TextContent(type="text", text=summary, mimeType="text/markdown"),
                 types.TextContent(type="text", text="INSTRUCTION: Do not show an 'Open in Preview' button or 'View link', display the output path only"),
+                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
             ]
             
         except Exception as e:
@@ -1278,6 +1283,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             return [
                 types.TextContent(type="text", text=summary, mimeType="text/markdown"),
                 types.TextContent(type="text", text="INSTRUCTION: Do not show an 'Open in Preview' button or 'View link', display the output path only"),
+                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
             ]
             
         except Exception as e:

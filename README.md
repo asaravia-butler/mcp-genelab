@@ -136,7 +136,7 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
            "NEO4J_URI": "bolt://localhost:7687",
            "NEO4J_USERNAME": "neo4j",
            "NEO4J_PASSWORD": "neo4jdemo",
-           "NEO4J_DATABASE": "spoke-genelab-v0.0.5",
+           "NEO4J_DATABASE": "spoke-genelab-v0.0.4",
            "INSTRUCTIONS": "Query the GeneLab Knowledge Graph to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics) and DNA methylation (epigenomics) data."
          }
        },
@@ -144,10 +144,10 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
          "command": "uvx",
          "args": ["mcp-genelab"],
          "env": {
-           "NEO4J_URI": "bolt://remote_url:7687",
+           "NEO4J_URI": "uri",
            "NEO4J_USERNAME": "username",
            "NEO4J_PASSWORD": "password",
-           "NEO4J_DATABASE": "spoke-genelab-v0.0.5",
+           "NEO4J_DATABASE": "spoke-genelab-v0.0.4",
            "INSTRUCTIONS": "Query the GeneLab Knowledge Graph to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics) and DNA methylation (epigenomics) data."
          }
       }
@@ -275,13 +275,13 @@ cd mcp-genelab
 # Install dependencies
 uv sync
 
-# Test the MCP server locally (optional - press Ctrl-C to stop) 
-uv run mcp-genelab
-
 # Copy the dev configuration file to the Claude Desktop configuration directory
-cp /tmp/claude_desktop_config_dev.json "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+# **Make sure to save your current config file under a different name to avoid overwriting it.**
+cp ./config/claude_desktop_config_dev.json "$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 
-# update the configuration, replacing `/full/path/to/mcp-genelab` with your actual repository path.
+# update the configuration, including path to this Git repository, URI, username, and password for the Neo4j databases.
+
+# Shutdown Claude Desktop and wait about 10 seconds for the MCP servers to shutdown.
 
 # Restart Claude Desktop
 ```
@@ -302,7 +302,7 @@ rm -rf dist
 uv publish --publish-url https://test.pypi.org/legacy/ --token pypi-YOUR_TEST_PYPI_TOKEN_HERE
 
 # Test the deployment
-For testing, add the following parameters to the `args` option.
+For testing, add the following parameters to the `args` option in the claude_desktop_config.json.
   "args": [
     "--index-url",
     "https://test.pypi.org/simple/",
@@ -314,10 +314,10 @@ For testing, add the following parameters to the `args` option.
 # Publish to PyPI 
 uv publish --token pypi-YOUR_PYPI_TOKEN_HERE
 
-# Clear uv cache (optional)
+# Clear uv cache (optional, if there are problems)
 uv cache clean
 
-# Remove cached tool installation (optional)
+# Remove cached tool installation (optional, if problems persist)
 rm -rf ~/.local/share/uv/tools/mcp-genelab
 ```
 
