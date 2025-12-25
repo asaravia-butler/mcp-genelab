@@ -221,9 +221,16 @@ To direct a query to a specific MCP server, use the @ operator followed by the s
 For example:
 
 ```
-@genelab
+@spoke-genelab
 ```
-See [response](docs/examples.md#Query-1).
+
+[chat transcript](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/spoke-genelab_overview.md)
+
+```
+@spoke-okn
+```
+
+[chat transcript](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/spoke-okn_overview.md)
 
 2. **Federated Queries Across Multiple Servers**
 
