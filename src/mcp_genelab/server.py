@@ -5,7 +5,10 @@ import logging
 import tempfile
 import shutil
 import re
+from datetime import datetime
 from typing import Any, Literal, Optional
+
+from . import __version__
 
 import numpy as np
 import matplotlib
@@ -1292,10 +1295,114 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             traceback.print_exc()
             return [types.TextContent(type="text", text=f"Error creating Venn diagram: {e}")]
 
+    def clean_mermaid_diagram(mermaid_content: str) -> list[types.TextContent]:
+        """Clean a Mermaid class diagram by removing unwanted elements.
+        
+        This tool removes:
+        - All note statements that would render as unreadable yellow boxes
+        - Empty curly braces from class definitions
+        - Strings after newline characters (e.g., truncates "ClassName\\nextra" to "ClassName")
+        - Vertical bars (|) which are not allowed in class diagrams
+        
+        Args:
+            mermaid_content: The raw Mermaid class diagram content
+            
+        Returns:
+            Cleaned Mermaid content with note statements, empty braces, and post-newline strings removed
+        """
+        import re
+        
+        # First, truncate any strings after \n characters in the entire content
+        # This handles cases like "MEASURED_DIFFERENTIAL_EXPRESSION\\nlog2fc, adj_p"
+        mermaid_content = re.sub(r'(\S+)\\n[^\s\n]*', r'\1', mermaid_content)
+        
+        lines = mermaid_content.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            # Remove vertical bars, they are not allowed in class diagrams
+            stripped = stripped.replace('|', ' ')
+            
+            # Skip any line containing note syntax
+            if (stripped.startswith('note ') or 
+                'note for' in stripped or 
+                'note left' in stripped or 
+                'note right' in stripped):
+                continue
+            
+            # Remove empty curly braces from class definitions
+            # Match patterns like: "class ClassName {     }" or "class ClassName { }"
+            if re.match(r'^\s*class\s+\w+\s*\{\s*\}\s*$', line):
+                # Replace the line with just the class name without braces
+                line = re.sub(r'^(\s*class\s+\w+)\s*\{\s*\}\s*$', r'\1', line)
+            
+            cleaned_lines.append(line)
+        
+        cleaned_content = '\n'.join(cleaned_lines)
+        
+        return [types.TextContent(type="text", text=cleaned_content)]
 
+    async def create_chat_transcript() -> list[types.TextContent]:
+        """Prompt for creating a chat transcript in markdown format with user prompts and Claude responses."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        prompt = f"""Create a chat transcript in .md format following the outline below. Include prompts, text responses, and visualizations preferably inline, and when not possible as a link to a document.
 
+## Chat Transcript
+<Title>
 
+👤 **User**  
+<prompt>
 
+---
+
+🧠 **Assistant**  
+<entire text response goes here>
+
+*Created by [mcp-genelab](https://github.com/nasa/mcp-genelab) {__version__} using <model_string> on {today}*
+
+Note: Replace <model_string> with the actual LLM model identifier being used.
+"""
+        
+        return [types.TextContent(type="text", text=prompt)]
+
+    async def visualize_schema() -> list[types.TextContent]:
+        """Prompt for visualizing the knowledge graph schema using a Mermaid class diagram."""
+        prompt =  """Visualize the knowledge graph schema using a Mermaid class diagram. 
+
+CRITICAL WORKFLOW - Follow these steps exactly:
+1. First call get_schema() if it has not been called to retrieve the classes and predicates
+2. Generate the raw Mermaid class diagram showing:
+   - All classes as nodes with their properties
+   - All predicates/relationships as connections between classes
+   - Include relationship labels
+3. Make the diagram taller / less wide:
+   - Set the diagram direction to TB (top→bottom): `direction TB`
+4. Do not append newline characters
+5. MANDATORY: Pass your generated diagram through the clean_mermaid_diagram tool
+6. MANDATORY: Use ONLY the cleaned output from step 5 in your response - do NOT use your original draft
+7. MANDATORY: Present the cleaned diagram inline in a mermaid code block in your response
+8. MANDATORY: After presenting the diagram in your response, create a .mermaid file containing ONLY the cleaned diagram code (no markdown fences, no explanatory text)
+9. MANDATORY: Save the .mermaid file to /mnt/user-data/outputs/<kg_name>-schema.mermaid
+10. MANDATORY: Use the present_files tool to share the .mermaid file with the user so it renders in the output window
+
+RENDERING REQUIREMENTS:
+- The .mermaid file MUST contain ONLY the Mermaid diagram code
+- DO NOT include markdown code fences (```mermaid) in the .mermaid file
+- DO NOT include any explanatory text in the .mermaid file
+- The file should start with "classDiagram" and contain only the diagram definition
+- ALWAYS use present_files to share the .mermaid file after creating it
+
+Common mistakes to avoid:
+- DO NOT render the diagram before cleaning it
+- DO NOT use your original draft after calling clean_mermaid_diagram
+- DO NOT add note statements or empty curly braces {} for classes without properties
+- ALWAYS copy the exact output from clean_mermaid_diagram tool
+"""     
+        return [types.TextContent(type="text", text=prompt)]
+
+    
     mcp.add_tool(get_neo4j_schema, name="get_neo4j_schema")
     mcp.add_tool(query, name="query")
     mcp.add_tool(get_node_metadata, name="get_node_metadata")
@@ -1305,6 +1412,9 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
     mcp.add_tool(select_assays, name="select_assays")
     mcp.add_tool(create_volcano_plot, name="create_volcano_plot")
     mcp.add_tool(create_venn_diagram, name="create_venn_diagram")
+    mcp.add_tool(clean_mermaid_diagram, name="clean_mermaid_diagram")
+    mcp.add_tool(create_chat_transcript, name="create_chat_transcript")
+    mcp.add_tool(visualize_schema, name="visualize_schema")
     
     return mcp
 
