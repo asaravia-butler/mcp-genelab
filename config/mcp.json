@@ -1,6 +1,6 @@
 {
   "servers": {
-    "genelab-local": {
+    "spoke-genelab-local": {
       "command": "uvx",
       "args": ["mcp-genelab"],
       "env": {
@@ -11,7 +11,7 @@
         "INSTRUCTIONS": "Query the GeneLab KG to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics) and DNA methylation (epigenomics) data."
       }
     },
-    "genelab": {
+    "spoke-genelab": {
       "command": "uvx",
       "args": ["mcp-genelab"],
       "env": {
