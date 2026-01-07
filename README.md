@@ -103,7 +103,7 @@ See [response](docs/differential_expression_analysis.md).
 
 ## Development
 
-[Instructions for local development](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/develpment.md)
+[Instructions for local development](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/development.md)
 
 ### Building and Publishing (maintainers only)
 
