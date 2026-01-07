@@ -3,7 +3,7 @@
 [![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
-[![PyPI version](https://badge.fury.io/py/mcp_genelab.svg)](https://badge.fury.io/py/mcp-genelab)
+[![PyPI version](https://img.shields.io/pypi/v/mcp-genelab?label=PyPI)](https://pypi.org/project/mcp-genelab/)
 
 A Model Context Protocol (MCP) server that converts natural language queries into [Cypher](https://neo4j.com/product/cypher-graph-query-language) queries and executes them against the configured Neo4j endpoints. Customized tools provide seamless access to the NASA [GeneLab Knowledge Graph](https://github.com/BaranziniLab/spoke_genelab), enabling AI-assisted analysis of spaceflight experiments and their biological effects. This server allows researchers to query differential gene expression and DNA methylation data from NASA's space biology experiments through natural language interactions with AI assistants like Claude.
 
@@ -42,62 +42,56 @@ Before installing the MCP server, ensure you have:
 
 ## Quick Start
 
-Once configured, you can immediately start querying knowledge graphs through natural language prompts in Claude Desktop or VS Code chat interface. The AI assistant will automatically convert your natural language queries into appropriate Cypher queries, execute them against the configured endpoints, and return structured, interpretable results.
+Once configured, you can start querying knowledge graphs through natural language prompts in Claude Desktop or VS Code chat interface.
 
-### Example Queries
+### Select and Configure MCP Tools (Claude Desktop)
 
-1. **Querying Specific MCP Servers**
-
-To direct a query to a specific MCP server, use the @ operator followed by the server name.
-For example:
-
+From the top menu bar:
 ```
-@spoke-genelab
+1. Select: Claude->Settings->Connectors
+2. Click: Configure for the MCP endpoints you want to use
+3. Select Tool permissions: Always allow
 ```
 
-[chat transcript](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/spoke-genelab_overview.md)
-
+In the prompt dialog box, click the `+` button:
 ```
-@spoke-okn
-```
-
-[chat transcript](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/spoke-okn_overview.md)
-
-2. **Federated Queries Across Multiple Servers**
-
-You can also perform federated queries across multiple MCP servers.
-
-```
-@genelab @humanspoke
+1. Turn off Web search
+2. Toggle MCP services on/off as needed
 ```
 
-This will execute the query across both servers and combine the results as applicable.
+<img src="https://raw.githubusercontent.com/sbl-sdsc/mcp-genelab/main/docs/images/select_mcp_server.png"
+     alt="Tool Selector"
+     width="500">
 
-See [response](docs/examples.md#Query-2).
+Use @kg_name to refer to a specific knowledge graph in chat (for example, @spoke-genelab).
 
-3. **Node Metadata**
-```
-Describe the Assay node and its properties in @genelab, and include an example for a ground control vs. space flight comparison.
-```
-See [response](docs/examples.md#Query-3).
+To create a transcript of a chat (see examples below), use the following prompt: 
+```Create a chat transcript```. 
+The transcript can then be downloaded in .md or .pdf format.
 
-4. **Relationship Metadata**
-```
-Describe the MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG relationship and its properties in @genelab-remote-cypher, and include an example for a ground control vs. space flight comparison.
-```
-See [response](docs/examples.md#Query-4).
+## Example Queries
 
-5. **High-level overview of the GeneLab KG**
-```
-Give a breakdown of missions, studies, and the type of technologies used in the studies.
- ```
-See [response](docs/examples.md#Query-5).
+### Knowledge Graph Overviews & Class Diagrams
 
-6. **Differential Expression Analysis with MCP tools:**
-```
-Analyze the differential expression data for GeneLab study OSD-244.
-```
-See [response](docs/differential_expression_analysis.md).
+Each link below points to a chat transcript that demonstrates how to generate a knowledge-graph overview and class diagram for a given Neo4j Knowledge Graph.
+
+[spoke-genelab](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/spoke-genelab-overview.md)
+
+[spoke-okn](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/spoke-okn-overview.md)
+
+### Node and Relationship Metadata Examples
+
+[spoke-genelab: Assay Node Metadata](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/assay-node-description.md)
+
+[spoke-genelab: MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG relationship](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/differential-expression-relationship.md)
+
+### SPOKE-GeneLab KG Inventory
+
+[spoke-genelab Inventory]((https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/genelab-inventory.md)
+
+### Differential Expression Analysis with MCP tools
+
+[spoke-genelab Study OSD-244](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/osd-244-differential-gene-expression.md)
 
 ---
 
@@ -105,7 +99,7 @@ See [response](docs/differential_expression_analysis.md).
 
 [Instructions for local development](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/development.md)
 
-### Building and Publishing (maintainers only)
+## Building and Publishing (maintainers only)
 
 [Instructions for building, testing, and publishing the mcp-genelab package on PyPI](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/build_publish.md)
 
