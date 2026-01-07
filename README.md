@@ -87,7 +87,7 @@ Each link below points to a chat transcript that demonstrates how to generate a 
 
 ### SPOKE-GeneLab KG Inventory
 
-[spoke-genelab Inventory]((https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/genelab-inventory.md)
+[spoke-genelab Inventory](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/examples/genelab-inventory.md)
 
 ### Differential Expression Analysis with MCP tools
 

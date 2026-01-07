@@ -155,5 +155,5 @@ MGene --> Gene : IS_ORTHOLOG_MGiG
 
 ---
 
-*Created by [mcp-genelab](https://github.com/sbl-sdsc/mcp-genelab) 0.3.0 on 2026-01-06*  
+*Created by [mcp-genelab](https://github.com/sbl-sdsc/mcp-genelab) 0.4.0 on 2026-01-06*  
 *Model: claude-sonnet-4-20250514*

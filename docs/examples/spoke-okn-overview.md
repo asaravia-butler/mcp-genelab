@@ -328,6 +328,6 @@ FOUNDIN_EfL --> Location
 
 ---
 
-*Created by [mcp-genelab](https://github.com/sbl-sdsc/mcp-genelab) 0.3.0 on 2026-01-06*
+*Created by [mcp-genelab](https://github.com/sbl-sdsc/mcp-genelab) 0.4.0 on 2026-01-06*
 
 *Model: Claude Sonnet 4.5 (claude-sonnet-4-5-20250929)*

@@ -201,7 +201,7 @@ Create volcano plots for these comparisons
 
 <img src="https://raw.githubusercontent.com/sbl-sdsc/mcp-genelab/main/docs/examples/volcano_plot_OSD-244_Space_Flight_30_day_On_Earth_Upon_euthanasia_vs_Ground_Control_30_day_On_Earth_Upon_euthanasia.png" 
      alt="volcano 30 days" 
-     width="600">
+     width="800">
 
 **Summary Statistics:**
 - Total genes analyzed: **6,281**
@@ -216,7 +216,7 @@ Create volcano plots for these comparisons
 
 <img src="https://raw.githubusercontent.com/sbl-sdsc/mcp-genelab/main/docs/examples/volcano_plot_OSD-244_Space_Flight_60_day_On_ISS_Carcass_vs_Ground_Control_60_day_On_Earth_Carcass.png" 
      alt="volcano 60 days" 
-     width="600">
+     width="800">
 
 **Summary Statistics:**
 - Total genes analyzed: **2,885**
@@ -336,7 +336,7 @@ Create a Venn diagram to visualize these overlaps
 
 <img src="https://raw.githubusercontent.com/sbl-sdsc/mcp-genelab/main/docs/examples/venn_2way_OSD-244_Space_Flight_30_day_On_Earth_vs_Ground_Control_30_day_On_Eart.png" 
      alt="volcano 60 days" 
-     width="600">
+     width="750">
 
 **Comparisons:**
 - **Assay 1 (Left):** Space Flight vs Ground Control (~30 day)
