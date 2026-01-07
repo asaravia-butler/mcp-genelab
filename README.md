@@ -38,7 +38,7 @@ Before installing the MCP server, ensure you have:
 
 ## Installation
 
-[Installation instructions for Claude Desktop and VS Code Insiders](https://github.com/sbl-sdsc/mcp-genelab/tree/main/doc/installation.md)
+[Installation instructions for Claude Desktop and VS Code Insiders](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/installation.md)
 
 ## Quick Start
 
@@ -103,15 +103,15 @@ See [response](docs/differential_expression_analysis.md).
 
 ## Development
 
-[Instructions for local development](https://github.com/sbl-sdsc/mcp-genelab/tree/main/doc/develpment.md)
+[Instructions for local development](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/develpment.md)
 
 ### Building and Publishing (maintainers only)
 
-[Instructions for building, testing, and publishing the mcp-genelab package on PyPI](https://github.com/sbl-sdsc/mcp-genelab/tree/main/doc/build_publish.md)
+[Instructions for building, testing, and publishing the mcp-genelab package on PyPI](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/build_publish.md)
 
 ## API Reference
 
-[mcp-genelab server API](https://github.com/sbl-sdsc/mcp-genelab/tree/main/doc/api.md)
+[mcp-genelab server API](https://github.com/sbl-sdsc/mcp-genelab/tree/main/docs/api.md)
 
 ## Troubleshooting
 
