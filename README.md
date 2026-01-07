@@ -61,7 +61,7 @@ In the prompt dialog box, click the `+` button:
 
 <img src="https://raw.githubusercontent.com/sbl-sdsc/mcp-genelab/main/docs/images/select_mcp_server.png"
      alt="Tool Selector"
-     width="500">
+     width="300">
 
 Use @kg_name to refer to a specific knowledge graph in chat (for example, @spoke-genelab).
 
