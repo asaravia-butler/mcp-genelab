@@ -86,6 +86,10 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 
         If the question is about up- or down-regulated genes, use the find_upregulated_genes
         or find_downreguluated genes
+
+        EDGE PROPERTIES - CRITICAL:
+        Many relationships in this knowledge graph have properties stored as edge attributes (data ON the relationship itself).
+        Examples include: log2fc, adj_p_value, methylation_diff, q_value, etc.
         """
 
         if _is_write_query(query):
@@ -775,12 +779,40 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     download_link = f"computer:///mnt/user-data/outputs/volcano_plot_{safe_filename}.png"
                 else:
                     # Running locally (macOS/Windows)
+                    # this seem to return now /root/Downloads ???
                     output_dir = os.path.expanduser('~/Downloads')
                     output_path = os.path.join(output_dir, f'volcano_plot_{safe_filename}.png')
                     download_link = f"file://{output_path}" # download link doesn't work on MacOS since it tries to access the file in the /mnt directory
+
+                # Add these debug lines
+                logger.info(f"HOME environment: {os.environ.get('HOME')}")
+                logger.info(f"Output directory: {output_dir}")
+                logger.info(f"Output path: {output_path}")
+                logger.info(f"Directory exists: {os.path.exists(output_dir)}")
+
                 
                 # Save directly to the target directory
-                plt.savefig(output_path, format='png', dpi=150, bbox_inches='tight')
+                logger.info(f"About to save figure to: {output_path}")
+                
+                try:
+                    # Ensure directory exists
+                    os.makedirs(output_dir, exist_ok=True)
+                    
+                    # Save the figure
+                    plt.savefig(output_path, format='png', dpi=300, bbox_inches='tight')
+                    
+                    # Check if file was created
+                    if os.path.exists(output_path):
+                        file_size = os.path.getsize(output_path)
+                        logger.info(f"SUCCESS: File saved: {output_path} ({file_size} bytes)")
+                    else:
+                        logger.error(f"FAILED: File not found after save: {output_path}")
+                        
+                except Exception as e:
+                    logger.error(f"ERROR saving file: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                
                 plt.close(fig)
                 
             except Exception as e:
@@ -1180,14 +1212,32 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             if is_claude_env:
                 output_dir = '/mnt/user-data/outputs'
                 output_path = os.path.join(output_dir, f'{safe_filename}.png')
-                download_link = f"computer:///mnt/user-data/outputs/{safe_filename}.png"
             else:
                 output_dir = os.path.expanduser('~/Downloads')
                 output_path = os.path.join(output_dir, f'{safe_filename}.png')
-                download_link = f"file://{output_path}"
             
             # Save the plot
-            plt.savefig(output_path, format='png', dpi=300, bbox_inches='tight')
+            logger.info(f"About to save figure to: {output_path}")
+            
+            try:
+                # Ensure directory exists
+                os.makedirs(output_dir, exist_ok=True)
+                
+                # Save the figure
+                plt.savefig(output_path, format='png', dpi=300, bbox_inches='tight')
+                
+                # Check if file was created
+                if os.path.exists(output_path):
+                    file_size = os.path.getsize(output_path)
+                    logger.info(f"SUCCESS: File saved: {output_path} ({file_size} bytes)")
+                else:
+                    logger.error(f"FAILED: File not found after save: {output_path}")
+                    
+            except Exception as e:
+                logger.error(f"ERROR saving file: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+            
             plt.close(fig)
             
             # Calculate statistics
@@ -1300,9 +1350,8 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         
         This tool removes:
         - All note statements that would render as unreadable yellow boxes
-        - Empty curly braces from class definitions
-        - Strings after newline characters (e.g., truncates "ClassName\\nextra" to "ClassName")
-        - Vertical bars (|) which are not allowed in class diagrams
+        - Empty curly braces from class definitions (handles both single-line and multi-line)
+        - Strings after newline characters (e.g., truncates "ClassName\nextra" to "ClassName")
         
         Args:
             mermaid_content: The raw Mermaid class diagram content
@@ -1313,14 +1362,17 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         import re
         
         # First, truncate any strings after \n characters in the entire content
-        # This handles cases like "MEASURED_DIFFERENTIAL_EXPRESSION\\nlog2fc, adj_p"
+        # This handles cases like "MEASURED_DIFFERENTIAL_METHYLATION_ASmMR\nmethylation_diff, q_value"
         mermaid_content = re.sub(r'(\S+)\\n[^\s\n]*', r'\1', mermaid_content)
         
         lines = mermaid_content.split('\n')
         cleaned_lines = []
+        i = 0
         
-        for line in lines:
+        while i < len(lines):
+            line = lines[i]
             stripped = line.strip()
+            
             # Remove vertical bars, they are not allowed in class diagrams
             stripped = stripped.replace('|', ' ')
             
@@ -1329,25 +1381,63 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 'note for' in stripped or 
                 'note left' in stripped or 
                 'note right' in stripped):
+                i += 1
                 continue
             
-            # Remove empty curly braces from class definitions
+            # Check for empty class definitions (single-line format)
             # Match patterns like: "class ClassName {     }" or "class ClassName { }"
             if re.match(r'^\s*class\s+\w+\s*\{\s*\}\s*$', line):
                 # Replace the line with just the class name without braces
                 line = re.sub(r'^(\s*class\s+\w+)\s*\{\s*\}\s*$', r'\1', line)
+                cleaned_lines.append(line)
+                i += 1
+                continue
+            
+            # Check for empty class definitions (multi-line format)
+            # Match: "class ClassName {" followed by "}" on next line(s)
+            if re.match(r'^\s*class\s+\w+\s*\{\s*$', line):
+                # Look ahead to check if next non-empty line is just "}"
+                j = i + 1
+                found_closing = False
+                has_content = False
+                
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if not next_line:  # Empty line, skip
+                        j += 1
+                        continue
+                    if next_line == '}':  # Found closing brace
+                        found_closing = True
+                        break
+                    else:  # Found content between braces
+                        has_content = True
+                        break
+                
+                if found_closing and not has_content:
+                    # This is an empty class definition - remove the braces
+                    class_match = re.match(r'^(\s*class\s+\w+)\s*\{\s*$', line)
+                    if class_match:
+                        cleaned_lines.append(class_match.group(1))
+                    # Skip ahead past the closing brace
+                    i = j + 1
+                    continue
             
             cleaned_lines.append(line)
+            i += 1
         
         cleaned_content = '\n'.join(cleaned_lines)
-        
         return [types.TextContent(type="text", text=cleaned_content)]
 
     async def create_chat_transcript() -> list[types.TextContent]:
         """Prompt for creating a chat transcript in markdown format with user prompts and Claude responses."""
+        from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
-        
-        prompt = f"""Create a chat transcript in .md format following the outline below. Include prompts, text responses, and visualizations preferably inline, and when not possible as a link to a document.
+    
+        prompt = f"""Create a chat transcript in .md format following the outline below. 
+1. Include prompts, text responses, and visualizations preferably inline, and when not possible as a link to a document. 
+2. Include mermaid diagrams inline. Do not link to the mermaid file.
+3. Do not include the prompt to create this transcript.
+4. Save the transcript to ~/Downloads/<descriptive-filename>.md
 
 ## Chat Transcript
 <Title>
@@ -1360,32 +1450,67 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 🧠 **Assistant**  
 <entire text response goes here>
 
-*Created by [mcp-genelab](https://github.com/nasa/mcp-genelab) {__version__} using <model_string> on {today}*
 
-Note: Replace <model_string> with the actual LLM model identifier being used.
+*Created by [mcp-genelab](https://github.com/sbl-sdsc/mcp-genelab) {__version__} on {today}*
+
+IMPORTANT: 
+- After the footer above, add a line with the model string you are using).
+- Save the complete transcript to ~/Downloads/ with a descriptive filename (e.g., ~/Downloads/filename-chat-transcript-{today}.md)
+- Use the present_files tool to share the transcript file with the user.
 """
-        
         return [types.TextContent(type="text", text=prompt)]
 
     async def visualize_schema() -> list[types.TextContent]:
         """Prompt for visualizing the knowledge graph schema using a Mermaid class diagram."""
-        prompt =  """Visualize the knowledge graph schema using a Mermaid class diagram. 
+        prompt = """Visualize the knowledge graph schema using a Mermaid class diagram. 
 
-CRITICAL WORKFLOW - Follow these steps exactly:
+CRITICAL WORKFLOW - Follow these steps EXACTLY IN ORDER:
+
+STEP 1-5: Generate Draft Diagram
 1. First call get_schema() if it has not been called to retrieve the classes and predicates
-2. Generate the raw Mermaid class diagram showing:
-   - All classes as nodes with their properties
-   - All predicates/relationships as connections between classes
-   - Include relationship labels
-3. Make the diagram taller / less wide:
+2. Analyze the schema to identify:
+   - Node classes (entities like Gene, Study, Assay, etc.)
+   - Edge predicates (relationships between nodes)
+   - Edge properties (predicates that describe data types like float, int, string, boolean, date, etc.)
+3. Generate the raw Mermaid class diagram showing:
+   - All node classes with their properties
+   - For edges WITHOUT properties: show as labeled arrows between classes (e.g., `Mission --> Study : CONDUCTED_MIcS`)
+   - For edges WITH properties: represent the edge as an intermediary class containing the properties, with unlabeled arrows connecting source → edge class → target
+4. Make the diagram taller / less wide:
    - Set the diagram direction to TB (top→bottom): `direction TB`
-4. Do not append newline characters
-5. MANDATORY: Pass your generated diagram through the clean_mermaid_diagram tool
-6. MANDATORY: Use ONLY the cleaned output from step 5 in your response - do NOT use your original draft
-7. MANDATORY: Present the cleaned diagram inline in a mermaid code block in your response
-8. MANDATORY: After presenting the diagram in your response, create a .mermaid file containing ONLY the cleaned diagram code (no markdown fences, no explanatory text)
-9. MANDATORY: Save the .mermaid file to /mnt/user-data/outputs/<kg_name>-schema.mermaid
-10. MANDATORY: Use the present_files tool to share the .mermaid file with the user so it renders in the output window
+5. Do not append newline characters
+
+⚠️  STEP 6-9: MANDATORY CLEANING - CANNOT BE SKIPPED ⚠️
+6. STOP HERE! You now have a draft diagram. DO NOT use it yet.
+7. Call clean_mermaid_diagram and pass your draft diagram as the parameter
+8. Wait for the tool to return the cleaned diagram
+9. Your draft is now OBSOLETE. Delete it from your mind. You will use ONLY the cleaned output.
+
+STEP 10-13: Present ONLY the Cleaned Diagram
+10. Copy the EXACT text returned by clean_mermaid_diagram (not your draft)
+11. Present this CLEANED diagram inline in a mermaid code block
+12. Create a .mermaid file with ONLY the CLEANED diagram code (no markdown fences)
+13. Save to ~/Downloads/<kg_name>-schema.mermaid and call present_files
+
+⛔ STOP AND CHECK - Before you respond to the user:
+□ Did I call clean_mermaid_diagram? If NO → Go back and call it now
+□ Am I using the cleaned output? If NO → Replace with cleaned output
+□ Does my diagram contain empty {} braces? If YES → You're using your draft, use cleaned output
+□ Did I call present_files? If NO → Call it now
+
+EDGES WITH PROPERTIES - CRITICAL GUIDELINES:
+- When an edge predicate has associated properties (e.g., log2fc, adj_p_value), DO NOT use a separate namespace
+- Instead, represent the edge as an intermediary class with the original predicate name
+- Connect the source class to the edge class, then the edge class to the target class
+- Example: Instead of `Assay --> Gene : MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG` with a separate EdgeProperties namespace,
+  create:
+    class MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG {
+        float log2fc
+        float adj_p_value
+    }
+    Assay --> MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG
+    MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG --> MGene
+- This approach clearly shows that the properties belong to the relationship itself
 
 RENDERING REQUIREMENTS:
 - The .mermaid file MUST contain ONLY the Mermaid diagram code
@@ -1394,12 +1519,14 @@ RENDERING REQUIREMENTS:
 - The file should start with "classDiagram" and contain only the diagram definition
 - ALWAYS use present_files to share the .mermaid file after creating it
 
-Common mistakes to avoid:
-- DO NOT render the diagram before cleaning it
-- DO NOT use your original draft after calling clean_mermaid_diagram
-- DO NOT add note statements or empty curly braces {} for classes without properties
-- ALWAYS copy the exact output from clean_mermaid_diagram tool
-"""     
+❌ COMMON MISTAKES - These will cause errors:
+- Using your draft diagram instead of the cleaned output from clean_mermaid_diagram
+- Not calling clean_mermaid_diagram at all
+- Calling clean_mermaid_diagram but then using your original draft anyway
+- Including empty curly braces {} for classes without properties (the cleaner removes these)
+- Not calling present_files to share the final .mermaid file
+- Using a separate EdgeProperties namespace instead of intermediary classes
+"""
         return [types.TextContent(type="text", text=prompt)]
 
     
