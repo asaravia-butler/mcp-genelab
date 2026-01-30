@@ -11,6 +11,12 @@ The GeneLab Knowledge Graph with data from NASA's [GeneLab Data Repository](http
 
 This server is part of the NSF-funded [Proto-OKN Project](https://www.proto-okn.net/) (Prototype Open Knowledge Network). It's an extension of the [Neo4j Cypher MCP server](https://github.com/neo4j-contrib/mcp-neo4j/tree/main/servers/mcp-neo4j-cypher).
 
+## Building and Querying the SPOKE-GeneLab Knowledge
+
+### [Video](https://www.youtube.com/watch?v=bCgffFYEE3M)
+
+### [Presentation](https://nebigdatahub.org/wp-content/uploads/2026/01/SPOKE-Genelab-Technical-Review.pdf)
+
 ## Features
 
 - **Natural Language Querying**: Ask questions in plain English - no need to write complex graph queries
