@@ -5,6 +5,7 @@ import logging
 import tempfile
 import shutil
 import re
+import base64
 from datetime import datetime
 from typing import Any, Literal, Optional
 
@@ -84,12 +85,25 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
     ) -> list[types.TextContent]:
         """Execute a Cypher query on the Neo4j database. 
 
-        If the question is about up- or down-regulated genes, use the find_upregulated_genes
-        or find_downreguluated genes
+        If the question is about up- or down-regulated genes, use the find_differentially_expressed_genes tool.
+        If the question is about hyper- or hypo-methylated regions, use the find_differentially_methylated_regions tool.
+        If the question is about differentially abundant organisms, use the find_differentially_abundant_organisms tool.
+        If the question is about a study and its assays, use the get_study_info tool.
 
         EDGE PROPERTIES - CRITICAL:
         Many relationships in this knowledge graph have properties stored as edge attributes (data ON the relationship itself).
-        Examples include: log2fc, adj_p_value, methylation_diff, q_value, etc.
+        
+        MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG: log2fc, adj_p_value, group_mean_1, group_stdev_1, group_mean_2, group_stdev_2
+        MEASURED_DIFFERENTIAL_METHYLATION_ASmMR: methylation_diff, q_value, group_mean_1, group_stdev_1, group_mean_2, group_stdev_2
+        MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO: log2fc, adj_p_value, lnfc, q_value, group_mean_1, group_stdev_1, group_mean_2, group_stdev_2
+        
+        RELATIONSHIP DIRECTIONS (always use directed arrows in queries):
+        (Assay)-[:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->(MGene)
+        (Assay)-[:MEASURED_DIFFERENTIAL_METHYLATION_ASmMR]->(MethylationRegion)
+        (Assay)-[:MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO]->(Organism)
+        (MGene)-[:METHYLATED_IN_MGmMR]->(MethylationRegion)
+        (Study)-[:PERFORMED_SpAS]->(Assay)
+        (Mission)-[:CONDUCTED_MIcS]->(Study)
         """
 
         if _is_write_query(query):
@@ -194,6 +208,128 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         except Exception as e:
             logger.error(f"Database error retrieving relationship metadata: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
+
+    async def get_study_info(
+        study_id: str = Field(..., description="Study identifier (e.g., 'OSD-267')")
+    ) -> list[types.TextContent]:
+        """Return detailed information about a study, including its assays with their technology and measurement types.
+        
+        This tool queries the GeneLab KG for:
+          1) Study metadata (name, project title, description, organism, etc.)
+          2) All assays for the study with their technology, measurement type, differential analysis method,
+             factors, and materials
+          3) Associated missions
+        
+        For example, OSD-267 should return that it has both 16S and ITS amplicon sequencing data.
+        
+        FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
+        """
+        
+        study_cypher = """
+        MATCH (s:Study {identifier: $study_id})
+        OPTIONAL MATCH (m:Mission)-[:CONDUCTED_MIcS]->(s)
+        RETURN s.identifier AS identifier,
+               s.name AS name,
+               s.project_title AS project_title,
+               s.project_type AS project_type,
+               s.description AS description,
+               s.organism AS organism,
+               s.taxonomy AS taxonomy,
+               s.host_organism AS host_organism,
+               s.host_strain AS host_strain,
+               collect(DISTINCT m.name) AS missions
+        """
+        
+        assay_cypher = """
+        MATCH (s:Study {identifier: $study_id})-[:PERFORMED_SpAS]->(a:Assay)
+        RETURN a.identifier AS assay_id,
+               a.name AS name,
+               a.technology AS technology,
+               a.measurement AS measurement,
+               a.differential_analysis_method AS analysis_method,
+               coalesce(a.factors_1, []) AS factors_1,
+               coalesce(a.factors_2, []) AS factors_2,
+               a.material_1 AS material_1,
+               a.material_2 AS material_2
+        ORDER BY a.technology, a.measurement, assay_id
+        """
+        
+        try:
+            import json as _json
+            
+            async with neo4j_driver.session(database=database) as session:
+                study_json_str = await session.execute_read(_read, study_cypher, {"study_id": study_id})
+                assay_json_str = await session.execute_read(_read, assay_cypher, {"study_id": study_id})
+            
+            study_data = _json.loads(study_json_str)
+            assays = _json.loads(assay_json_str)
+            
+            if not study_data:
+                return [types.TextContent(type="text", text=f"No study found with identifier '{study_id}'.")]
+            
+            s = study_data[0]
+            
+            lines = []
+            lines.append(f"## Study: {s.get('identifier', 'N/A')}\n")
+            lines.append(f"**Project Title:** {s.get('project_title', 'N/A')}")
+            lines.append(f"**Project Type:** {s.get('project_type', 'N/A')}")
+            lines.append(f"**Organism:** {s.get('organism', 'N/A')} (Taxonomy: {s.get('taxonomy', 'N/A')})")
+            
+            if s.get('host_organism'):
+                lines.append(f"**Host Organism:** {s.get('host_organism', 'N/A')}")
+            if s.get('host_strain'):
+                lines.append(f"**Host Strain:** {s.get('host_strain', 'N/A')}")
+            
+            missions = s.get('missions', [])
+            missions = [m for m in missions if m]  # filter nulls
+            if missions:
+                lines.append(f"**Mission(s):** {', '.join(missions)}")
+            
+            if s.get('description'):
+                desc = s['description']
+                if len(desc) > 500:
+                    desc = desc[:500] + "..."
+                lines.append(f"\n**Description:** {desc}")
+            
+            lines.append("")
+            
+            # Summarize assay technologies
+            if assays:
+                # Group by technology
+                tech_summary = {}
+                for a in assays:
+                    tech = a.get('technology', 'Unknown')
+                    meas = a.get('measurement', 'Unknown')
+                    key = f"{meas} – {tech}"
+                    if key not in tech_summary:
+                        tech_summary[key] = 0
+                    tech_summary[key] += 1
+                
+                lines.append(f"### Data Types ({len(assays)} total assays)\n")
+                lines.append("| Measurement | Technology | # Assays |")
+                lines.append("|-------------|-----------|----------|")
+                for key, count in sorted(tech_summary.items()):
+                    parts = key.split(" – ", 1)
+                    lines.append(f"| {parts[0]} | {parts[1]} | {count} |")
+                
+                lines.append("")
+                lines.append("### Assay Details\n")
+                lines.append("| Assay ID | Technology | Measurement | Analysis Method | Factors 1 | Factors 2 | Material 1 | Material 2 |")
+                lines.append("|----------|-----------|-------------|-----------------|-----------|-----------|------------|------------|")
+                for a in assays:
+                    f1 = ",".join(a.get('factors_1', [])) or 'N/A'
+                    f2 = ",".join(a.get('factors_2', [])) or 'N/A'
+                    lines.append(f"| `{a.get('assay_id', 'N/A')}` | {a.get('technology', 'N/A')} | {a.get('measurement', 'N/A')} | {a.get('analysis_method', 'N/A')} | {f1} | {f2} | {a.get('material_1', 'N/A')} | {a.get('material_2', 'N/A')} |")
+            else:
+                lines.append("*No assays found for this study.*")
+            
+            return [
+                types.TextContent(type="text", text="\n".join(lines), mimeType="text/markdown"),
+            ]
+        
+        except Exception as e:
+            logger.error(f"Error in get_study_info: {e}")
+            return [types.TextContent(type="text", text=f"Error in get_study_info: {e}")]
 
     async def select_assays(
         study_id: Optional[str] = None,
@@ -373,7 +509,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
     
     async def find_differentially_expressed_genes(
         assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
-        top_n: int = Field(5, description="How many genes to return for each of up- and down-regulated lists")
+        top_n: int = Field(10, description="How many genes to display for each of up- and down-regulated lists")
     ) -> list[types.TextContent]:
         """Return the top-N up- and down-regulated genes for a given assay_id.
     
@@ -381,88 +517,391 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
           1) Top-N upregulated genes (log2fc > 0, highest first)
           2) Top-N downregulated genes (log2fc < 0, lowest first)
         
+        Results include gene symbol, gene name, log2 fold change, adjusted p-value,
+        and group means and standard deviations for each condition.
+        
         FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
         """
+
+        factors_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+        RETURN a.factors_1 AS factors_1, a.factors_2 AS factors_2
+        """
+
         up_cypher = """
         MATCH (a:Assay {identifier: $assay_id})
-              -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
-              (g:MGene)
-        WHERE m.log2fc > 0
+              -[r:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->
+              (mg:MGene)
+        WHERE r.log2fc > 0
         RETURN
-          'upregulated'  AS regulation,
-          g.symbol       AS symbol,
-          m.log2fc       AS log2fc,
-          m.adj_p_value  AS adj_p_value
-        ORDER BY m.log2fc DESC
+          mg.symbol          AS gene_symbol,
+          mg.name            AS gene_name,
+          r.log2fc           AS log2fc,
+          r.adj_p_value      AS adj_p_value,
+          r.group_mean_1     AS group_mean_1,
+          r.group_stdev_1    AS group_stdev_1,
+          r.group_mean_2     AS group_mean_2,
+          r.group_stdev_2    AS group_stdev_2
+        ORDER BY r.log2fc DESC
         LIMIT $top_n
         """
     
         down_cypher = """
         MATCH (a:Assay {identifier: $assay_id})
-              -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
-              (g:MGene)
-        WHERE m.log2fc < 0
+              -[r:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->
+              (mg:MGene)
+        WHERE r.log2fc < 0
         RETURN
-          'downregulated' AS regulation,
-          g.symbol        AS symbol,
-          m.log2fc        AS log2fc,
-          m.adj_p_value   AS adj_p_value
-        ORDER BY m.log2fc ASC
+          mg.symbol          AS gene_symbol,
+          mg.name            AS gene_name,
+          r.log2fc           AS log2fc,
+          r.adj_p_value      AS adj_p_value,
+          r.group_mean_1     AS group_mean_1,
+          r.group_stdev_1    AS group_stdev_1,
+          r.group_mean_2     AS group_mean_2,
+          r.group_stdev_2    AS group_stdev_2
+        ORDER BY r.log2fc ASC
         LIMIT $top_n
+        """
+
+        count_up_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})-[r:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->(mg:MGene)
+        WHERE r.log2fc > 0
+        RETURN count(mg) AS total
+        """
+
+        count_down_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})-[r:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->(mg:MGene)
+        WHERE r.log2fc < 0
+        RETURN count(mg) AS total
         """
     
         try:
             import json as _json
     
             async with neo4j_driver.session(database=database) as session:
+                factors_json_str = await session.execute_read(_read, factors_cypher, {"assay_id": assay_id})
                 up_json_str = await session.execute_read(_read, up_cypher, {"assay_id": assay_id, "top_n": top_n})
                 down_json_str = await session.execute_read(_read, down_cypher, {"assay_id": assay_id, "top_n": top_n})
+                count_up_str = await session.execute_read(_read, count_up_cypher, {"assay_id": assay_id})
+                count_down_str = await session.execute_read(_read, count_down_cypher, {"assay_id": assay_id})
     
+            factors_data = _json.loads(factors_json_str)
             up = _json.loads(up_json_str)
             down = _json.loads(down_json_str)
+            total_up = _json.loads(count_up_str)[0]['total'] if _json.loads(count_up_str) else 0
+            total_down = _json.loads(count_down_str)[0]['total'] if _json.loads(count_down_str) else 0
+
+            if factors_data:
+                f1 = factors_data[0].get('factors_1', [])
+                f2 = factors_data[0].get('factors_2', [])
+                group1_label = ",".join(f1) if f1 else "Group 1"
+                group2_label = ",".join(f2) if f2 else "Group 2"
+            else:
+                group1_label = "Group 1"
+                group2_label = "Group 2"
     
-            # Format as markdown tables for better display
-            def _fmt_markdown_table(rows, title):
-                """Format results as a markdown table"""
+            def _fmt_de_table(rows, title, total_count):
                 if not rows:
                     return f"## **{title}**\nNo significantly {title.lower()} genes were found.\n"
-                
                 lines = [
-                    f"## **{title}**\n",
-                    "| Gene Symbol | Log2 Fold Change | Adjusted P-value |",
-                    "|-------------|------------------|------------------|"
+                    f"## **{title}** (showing {len(rows)} of {total_count} total)\n",
+                    f"| Gene | Gene Name | Log2FC | Adj.p-value | Mean ({group1_label}) | SD ({group1_label}) | Mean ({group2_label}) | SD ({group2_label}) |",
+                    "|------|-----------|--------|-------------|" + "------------|" * 4
                 ]
-                
                 for r in rows:
-                    symbol = r.get('symbol', 'N/A')
-                    log2fc = r.get('log2fc')
+                    sym = r.get('gene_symbol', 'N/A')
+                    name = r.get('gene_name', 'N/A')
+                    l2fc = r.get('log2fc')
                     adj_p = r.get('adj_p_value')
-                    
-                    # Format numbers nicely
-                    log2fc_str = f"{log2fc:.2f}" if log2fc is not None else "N/A"
-                    adj_p_str = f"{adj_p}" if adj_p is not None else "N/A"
-                    
-                    lines.append(f"| **{symbol}** | {log2fc_str} | {adj_p_str} |")
-                
+                    gm1 = r.get('group_mean_1'); gs1 = r.get('group_stdev_1')
+                    gm2 = r.get('group_mean_2'); gs2 = r.get('group_stdev_2')
+                    lines.append(f"| **{sym}** | {name} | {l2fc:.4f if l2fc is not None else 'N/A'} | {adj_p if adj_p is not None else 'N/A'} | {gm1:.3f if gm1 is not None else 'N/A'} | {gs1:.3f if gs1 is not None else 'N/A'} | {gm2:.3f if gm2 is not None else 'N/A'} | {gs2:.3f if gs2 is not None else 'N/A'} |")
                 return "\n".join(lines)
     
-            # Create human-readable markdown output
             human_lines = [
-                f"Top differentially expressed genes for assay: {assay_id}\n",
-                _fmt_markdown_table(up, "Upregulated Genes"),
+                f"Top differentially expressed genes for assay: `{assay_id}`\n",
+                _fmt_de_table(up, "Upregulated Genes", total_up),
                 "",
-                _fmt_markdown_table(down, "Downregulated Genes")
+                _fmt_de_table(down, "Downregulated Genes", total_down)
             ]
-            human = "\n".join(human_lines)
     
             return [
-                types.TextContent(type="text", text=human, mimeType="text/markdown"),
+                types.TextContent(type="text", text="\n".join(human_lines), mimeType="text/markdown"),
                 types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
             ]
     
         except Exception as e:
-            logger.error(f"Error in find_de_genes: {e}")
-            return [types.TextContent(type="text", text=f"Error in find_de_genes: {e}")]
+            logger.error(f"Error in find_differentially_expressed_genes: {e}")
+            return [types.TextContent(type="text", text=f"Error in find_differentially_expressed_genes: {e}")]
+
+    async def find_differentially_methylated_regions(
+        assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-48-abc123')"),
+        top_n: int = Field(10, description="How many regions to display for each of hyper- and hypo-methylated lists")
+    ) -> list[types.TextContent]:
+        """Return the top-N hyper- and hypo-methylated regions for a given assay_id.
+    
+        This tool runs two queries on the GeneLab KG:
+          1) Top-N hypermethylated regions (methylation_diff > 0, highest first)
+          2) Top-N hypomethylated regions (methylation_diff < 0, lowest first)
+        
+        Results include gene symbol, gene name, region, in_promoter flag,
+        methylation difference, q-value, and group means and standard deviations.
+        
+        FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
+        """
+
+        factors_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+        RETURN a.factors_1 AS factors_1, a.factors_2 AS factors_2
+        """
+
+        hyper_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+              -[r:MEASURED_DIFFERENTIAL_METHYLATION_ASmMR]->
+              (mr:MethylationRegion)
+              <-[:METHYLATED_IN_MGmMR]-(mg:MGene)
+        WHERE r.methylation_diff > 0
+        RETURN
+          mg.symbol            AS gene_symbol,
+          mg.name              AS gene_name,
+          mr.identifier        AS region,
+          mr.in_promoter       AS in_promoter,
+          r.methylation_diff   AS methylation_diff,
+          r.q_value            AS q_value,
+          r.group_mean_1       AS group_mean_1,
+          r.group_stdev_1      AS group_stdev_1,
+          r.group_mean_2       AS group_mean_2,
+          r.group_stdev_2      AS group_stdev_2
+        ORDER BY r.methylation_diff DESC
+        LIMIT $top_n
+        """
+    
+        hypo_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+              -[r:MEASURED_DIFFERENTIAL_METHYLATION_ASmMR]->
+              (mr:MethylationRegion)
+              <-[:METHYLATED_IN_MGmMR]-(mg:MGene)
+        WHERE r.methylation_diff < 0
+        RETURN
+          mg.symbol            AS gene_symbol,
+          mg.name              AS gene_name,
+          mr.identifier        AS region,
+          mr.in_promoter       AS in_promoter,
+          r.methylation_diff   AS methylation_diff,
+          r.q_value            AS q_value,
+          r.group_mean_1       AS group_mean_1,
+          r.group_stdev_1      AS group_stdev_1,
+          r.group_mean_2       AS group_mean_2,
+          r.group_stdev_2      AS group_stdev_2
+        ORDER BY r.methylation_diff ASC
+        LIMIT $top_n
+        """
+
+        count_hyper_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})-[r:MEASURED_DIFFERENTIAL_METHYLATION_ASmMR]->(mr:MethylationRegion)<-[:METHYLATED_IN_MGmMR]-(mg:MGene)
+        WHERE r.methylation_diff > 0
+        RETURN count(*) AS total
+        """
+
+        count_hypo_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})-[r:MEASURED_DIFFERENTIAL_METHYLATION_ASmMR]->(mr:MethylationRegion)<-[:METHYLATED_IN_MGmMR]-(mg:MGene)
+        WHERE r.methylation_diff < 0
+        RETURN count(*) AS total
+        """
+    
+        try:
+            import json as _json
+    
+            async with neo4j_driver.session(database=database) as session:
+                factors_json_str = await session.execute_read(_read, factors_cypher, {"assay_id": assay_id})
+                hyper_json_str = await session.execute_read(_read, hyper_cypher, {"assay_id": assay_id, "top_n": top_n})
+                hypo_json_str = await session.execute_read(_read, hypo_cypher, {"assay_id": assay_id, "top_n": top_n})
+                count_hyper_str = await session.execute_read(_read, count_hyper_cypher, {"assay_id": assay_id})
+                count_hypo_str = await session.execute_read(_read, count_hypo_cypher, {"assay_id": assay_id})
+    
+            factors_data = _json.loads(factors_json_str)
+            hyper = _json.loads(hyper_json_str)
+            hypo = _json.loads(hypo_json_str)
+            total_hyper = _json.loads(count_hyper_str)[0]['total'] if _json.loads(count_hyper_str) else 0
+            total_hypo = _json.loads(count_hypo_str)[0]['total'] if _json.loads(count_hypo_str) else 0
+
+            if factors_data:
+                f1 = factors_data[0].get('factors_1', [])
+                f2 = factors_data[0].get('factors_2', [])
+                group1_label = ",".join(f1) if f1 else "Group 1"
+                group2_label = ",".join(f2) if f2 else "Group 2"
+            else:
+                group1_label = "Group 1"
+                group2_label = "Group 2"
+    
+            def _fmt_meth_table(rows, title, total_count):
+                if not rows:
+                    return f"## **{title}**\nNo significantly {title.lower()} regions were found.\n"
+                lines = [
+                    f"## **{title}** (showing {len(rows)} of {total_count} total)\n",
+                    f"| Gene | Gene Name | Region | In Promoter | Methylation Diff (%) | q-value | Mean ({group1_label}) | SD ({group1_label}) | Mean ({group2_label}) | SD ({group2_label}) |",
+                    "|------|-----------|--------|-------------|----------------------|---------|" + "------------|" * 4
+                ]
+                for r in rows:
+                    gene = r.get('gene_symbol') or 'N/A'
+                    name = r.get('gene_name') or 'N/A'
+                    region = r.get('region', 'N/A')
+                    in_prom = r.get('in_promoter')
+                    in_prom_str = str(in_prom) if in_prom is not None else 'N/A'
+                    md = r.get('methylation_diff')
+                    qv = r.get('q_value')
+                    gm1 = r.get('group_mean_1'); gs1 = r.get('group_stdev_1')
+                    gm2 = r.get('group_mean_2'); gs2 = r.get('group_stdev_2')
+                    lines.append(f"| **{gene}** | {name} | {region} | {in_prom_str} | {md:.3f if md is not None else 'N/A'} | {qv if qv is not None else 'N/A'} | {gm1:.3f if gm1 is not None else 'N/A'} | {gs1:.3f if gs1 is not None else 'N/A'} | {gm2:.3f if gm2 is not None else 'N/A'} | {gs2:.3f if gs2 is not None else 'N/A'} |")
+                return "\n".join(lines)
+    
+            human_lines = [
+                f"Top differentially methylated regions for assay: `{assay_id}`\n",
+                _fmt_meth_table(hyper, "Hypermethylated Regions", total_hyper),
+                "",
+                _fmt_meth_table(hypo, "Hypomethylated Regions", total_hypo)
+            ]
+    
+            return [
+                types.TextContent(type="text", text="\n".join(human_lines), mimeType="text/markdown"),
+                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
+            ]
+    
+        except Exception as e:
+            logger.error(f"Error in find_differentially_methylated_regions: {e}")
+            return [types.TextContent(type="text", text=f"Error in find_differentially_methylated_regions: {e}")]
+
+    async def find_differentially_abundant_organisms(
+        assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
+        top_n: int = Field(10, description="How many organisms to display for each of increased and decreased abundance lists")
+    ) -> list[types.TextContent]:
+        """Return the top-N organisms with increased and decreased differential abundance for a given assay_id.
+    
+        This tool runs two queries on the GeneLab KG:
+          1) Top-N organisms with increased abundance (lnfc > 0, highest first)
+          2) Top-N organisms with decreased abundance (lnfc < 0, lowest first)
+        
+        Results include organism name, log2fc, adj_p_value, lnfc, q-value,
+        and group means and standard deviations.
+        
+        FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
+        """
+
+        factors_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+        RETURN a.factors_1 AS factors_1, a.factors_2 AS factors_2
+        """
+
+        up_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+              -[r:MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO]->
+              (o:Organism)
+        WHERE r.lnfc > 0
+        RETURN
+          o.name             AS organism_name,
+          o.identifier       AS organism_id,
+          r.log2fc           AS log2fc,
+          r.adj_p_value      AS adj_p_value,
+          r.lnfc             AS lnfc,
+          r.q_value          AS q_value,
+          r.group_mean_1     AS group_mean_1,
+          r.group_stdev_1    AS group_stdev_1,
+          r.group_mean_2     AS group_mean_2,
+          r.group_stdev_2    AS group_stdev_2
+        ORDER BY r.lnfc DESC
+        LIMIT $top_n
+        """
+    
+        down_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})
+              -[r:MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO]->
+              (o:Organism)
+        WHERE r.lnfc < 0
+        RETURN
+          o.name             AS organism_name,
+          o.identifier       AS organism_id,
+          r.log2fc           AS log2fc,
+          r.adj_p_value      AS adj_p_value,
+          r.lnfc             AS lnfc,
+          r.q_value          AS q_value,
+          r.group_mean_1     AS group_mean_1,
+          r.group_stdev_1    AS group_stdev_1,
+          r.group_mean_2     AS group_mean_2,
+          r.group_stdev_2    AS group_stdev_2
+        ORDER BY r.lnfc ASC
+        LIMIT $top_n
+        """
+
+        count_up_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})-[r:MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO]->(o:Organism)
+        WHERE r.lnfc > 0
+        RETURN count(o) AS total
+        """
+
+        count_down_cypher = """
+        MATCH (a:Assay {identifier: $assay_id})-[r:MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO]->(o:Organism)
+        WHERE r.lnfc < 0
+        RETURN count(o) AS total
+        """
+    
+        try:
+            import json as _json
+    
+            async with neo4j_driver.session(database=database) as session:
+                factors_json_str = await session.execute_read(_read, factors_cypher, {"assay_id": assay_id})
+                up_json_str = await session.execute_read(_read, up_cypher, {"assay_id": assay_id, "top_n": top_n})
+                down_json_str = await session.execute_read(_read, down_cypher, {"assay_id": assay_id, "top_n": top_n})
+                count_up_str = await session.execute_read(_read, count_up_cypher, {"assay_id": assay_id})
+                count_down_str = await session.execute_read(_read, count_down_cypher, {"assay_id": assay_id})
+    
+            factors_data = _json.loads(factors_json_str)
+            up = _json.loads(up_json_str)
+            down = _json.loads(down_json_str)
+            total_up = _json.loads(count_up_str)[0]['total'] if _json.loads(count_up_str) else 0
+            total_down = _json.loads(count_down_str)[0]['total'] if _json.loads(count_down_str) else 0
+
+            if factors_data:
+                f1 = factors_data[0].get('factors_1', [])
+                f2 = factors_data[0].get('factors_2', [])
+                group1_label = ",".join(f1) if f1 else "Group 1"
+                group2_label = ",".join(f2) if f2 else "Group 2"
+            else:
+                group1_label = "Group 1"
+                group2_label = "Group 2"
+    
+            def _fmt_abund_table(rows, title, total_count):
+                if not rows:
+                    return f"## **{title}**\nNo significantly {title.lower()} organisms were found.\n"
+                lines = [
+                    f"## **{title}** (showing {len(rows)} of {total_count} total)\n",
+                    f"| Organism | Log2FC | Adj.p-value | LnFC | q-value | Mean ({group1_label}) | SD ({group1_label}) | Mean ({group2_label}) | SD ({group2_label}) |",
+                    "|----------|--------|-------------|------|---------|" + "------------|" * 4
+                ]
+                for r in rows:
+                    org = r.get('organism_name', 'N/A')
+                    l2fc = r.get('log2fc'); adj_p = r.get('adj_p_value')
+                    lnfc = r.get('lnfc'); qv = r.get('q_value')
+                    gm1 = r.get('group_mean_1'); gs1 = r.get('group_stdev_1')
+                    gm2 = r.get('group_mean_2'); gs2 = r.get('group_stdev_2')
+                    lines.append(f"| **{org}** | {l2fc:.4f if l2fc is not None else 'N/A'} | {adj_p if adj_p is not None else 'N/A'} | {lnfc:.4f if lnfc is not None else 'N/A'} | {qv if qv is not None else 'N/A'} | {gm1:.3f if gm1 is not None else 'N/A'} | {gs1:.3f if gs1 is not None else 'N/A'} | {gm2:.3f if gm2 is not None else 'N/A'} | {gs2:.3f if gs2 is not None else 'N/A'} |")
+                return "\n".join(lines)
+    
+            human_lines = [
+                f"Top differentially abundant organisms for assay: `{assay_id}`\n",
+                _fmt_abund_table(up, "Increased Abundance", total_up),
+                "",
+                _fmt_abund_table(down, "Decreased Abundance", total_down)
+            ]
+    
+            return [
+                types.TextContent(type="text", text="\n".join(human_lines), mimeType="text/markdown"),
+                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
+            ]
+    
+        except Exception as e:
+            logger.error(f"Error in find_differentially_abundant_organisms: {e}")
+            return [types.TextContent(type="text", text=f"Error in find_differentially_abundant_organisms: {e}")]
 
     async def find_common_differentially_expressed_genes(
             assay_ids: list[str] = Field(..., description="List of assay identifiers (e.g., ['OSD-253-abc123', 'OSD-253-def456'])"),
@@ -496,7 +935,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     # Query for upregulated genes - NO LIMIT, uses threshold
                     up_query = """
                     MATCH (a:Assay {identifier: $assay_id})
-                          -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
+                          -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->
                           (g:MGene)
                     WHERE m.log2fc > $log2fc_threshold and m.adj_p_value < $adj_p_threshold
                     RETURN g.symbol as gene_symbol, m.log2fc as log2fc
@@ -506,7 +945,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     # Query for downregulated genes - NO LIMIT, uses threshold
                     down_query = """
                     MATCH (a:Assay {identifier: $assay_id})
-                          -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]-
+                          -[m:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->
                           (g:MGene)
                     WHERE m.log2fc < -$log2fc_threshold and m.adj_p_value < $adj_p_threshold
                     RETURN g.symbol as gene_symbol, m.log2fc as log2fc
@@ -746,7 +1185,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             # Labels and title
             ax.set_xlabel(f'Log₂ Fold Change', fontsize=12, fontweight='bold')
             ax.set_ylabel('-Log₁₀ (Adjusted P-value)', fontsize=12, fontweight='bold')
-            ax.text(0.5, 1.08, f'Volano Plot: {study}', transform=ax.transAxes, fontsize=12, fontweight='bold', ha='center', va='bottom')
+            ax.text(0.5, 1.08, f'Volcano Plot: {study}', transform=ax.transAxes, fontsize=12, fontweight='bold', ha='center', va='bottom')
             ax.text(0.5, 1.03, f'({factors_1}) vs. ({factors_2})', transform=ax.transAxes, fontsize=10, fontweight='normal', ha='center', va='bottom')
             
             # Legend
@@ -799,7 +1238,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     os.makedirs(output_dir, exist_ok=True)
                     
                     # Save the figure
-                    plt.savefig(output_path, format='png', dpi=300, bbox_inches='tight')
+                    plt.savefig(output_path, format='png', dpi=150, bbox_inches='tight')
                     
                     # Check if file was created
                     if os.path.exists(output_path):
@@ -842,12 +1281,43 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 - Not significant: {n_not_sig}
 """
             
-            # Return text summary
-            return [
+            # Build return list with text summary and inline image
+            result_items: list[types.Content] = [
                 types.TextContent(type="text", text=summary, mimeType="text/markdown"),
-                types.TextContent(type="text", text="INSTRUCTION: Do not show an 'Open in Preview' button or 'View link', display the output path only"),
-                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
             ]
+
+            # Encode the saved PNG as base64 and return as ImageContent so it renders inline
+            # Only include if file size is under 700KB to stay within MCP 1MB tool result limit
+            if output_path and os.path.exists(output_path):
+                try:
+                    file_size = os.path.getsize(output_path)
+                    if file_size < 700_000:
+                        with open(output_path, "rb") as img_file:
+                            img_b64 = base64.standard_b64encode(img_file.read()).decode("utf-8")
+                        result_items.append(
+                            types.ImageContent(type="image", data=img_b64, mimeType="image/png")
+                        )
+                    else:
+                        logger.info(f"Volcano plot too large for inline ({file_size} bytes), skipping base64")
+                except Exception as img_err:
+                    logger.warning(f"Could not encode volcano plot image: {img_err}")
+
+            result_items.extend([
+                types.TextContent(
+                    type="text",
+                    text=(
+                        f"INSTRUCTION: The plot PNG has been saved to: {output_path}\n"
+                        "You MUST now call the present_files tool with this exact path as the argument "
+                        "so Claude creates a downloadable artifact for the user. "
+                        "Do this immediately after displaying the inline image above. "
+                        "For the chat transcript, embed the image using a markdown image tag: "
+                        f"![Volcano Plot]({output_path})"
+                    ),
+                ),
+                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
+            ])
+
+            return result_items
             
         except Exception as e:
             logger.error(f"Error creating volcano plot: {e}")
@@ -1224,7 +1694,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 os.makedirs(output_dir, exist_ok=True)
                 
                 # Save the figure
-                plt.savefig(output_path, format='png', dpi=300, bbox_inches='tight')
+                plt.savefig(output_path, format='png', dpi=150, bbox_inches='tight')
                 
                 # Check if file was created
                 if os.path.exists(output_path):
@@ -1333,11 +1803,43 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 - Total Assay 2: {len(assay2_down)}
 """
             
-            return [
+            # Build return list with text summary and inline image
+            venn_result_items: list[types.Content] = [
                 types.TextContent(type="text", text=summary, mimeType="text/markdown"),
-                types.TextContent(type="text", text="INSTRUCTION: Do not show an 'Open in Preview' button or 'View link', display the output path only"),
-                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
             ]
+
+            # Encode the saved PNG as base64 and return as ImageContent so it renders inline
+            # Only include if file size is under 700KB to stay within MCP 1MB tool result limit
+            if output_path and os.path.exists(output_path):
+                try:
+                    file_size = os.path.getsize(output_path)
+                    if file_size < 700_000:
+                        with open(output_path, "rb") as img_file:
+                            img_b64 = base64.standard_b64encode(img_file.read()).decode("utf-8")
+                        venn_result_items.append(
+                            types.ImageContent(type="image", data=img_b64, mimeType="image/png")
+                        )
+                    else:
+                        logger.info(f"Venn diagram too large for inline ({file_size} bytes), skipping base64")
+                except Exception as img_err:
+                    logger.warning(f"Could not encode Venn diagram image: {img_err}")
+
+            venn_result_items.extend([
+                types.TextContent(
+                    type="text",
+                    text=(
+                        f"INSTRUCTION: The plot PNG has been saved to: {output_path}\n"
+                        "You MUST now call the present_files tool with this exact path as the argument "
+                        "so Claude creates a downloadable artifact for the user. "
+                        "Do this immediately after displaying the inline image above. "
+                        "For the chat transcript, embed the image using a markdown image tag: "
+                        f"![Venn Diagram]({output_path})"
+                    ),
+                ),
+                types.TextContent(type="text", text="INSTRUCTION: List the arguments of this tool that can be adjusted, including the default values."),
+            ])
+
+            return venn_result_items
             
         except Exception as e:
             logger.error(f"Error creating Venn diagram: {e}")
@@ -1437,7 +1939,8 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 1. Include prompts, text responses, and visualizations preferably inline, and when not possible as a link to a document. 
 2. Include mermaid diagrams inline. Do not link to the mermaid file.
 3. Do not include the prompt to create this transcript.
-4. Save the transcript to ~/Downloads/<descriptive-filename>.md
+4. For plots (volcano plots, Venn diagrams, etc.): embed them as markdown image references using the file path returned by the tool, e.g.: ![Volcano Plot](/mnt/user-data/outputs/volcano_plot_....png). Do NOT skip or omit plots - they must appear inline in the transcript at the point in the conversation where they were generated.
+5. Save the transcript to ~/Downloads/<descriptive-filename>.md
 
 ## Chat Transcript
 <Title>
@@ -1450,6 +1953,10 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 🧠 **Assistant**  
 <entire text response goes here>
 
+<!-- For each plot generated during the conversation, include the image inline like this:
+![Plot Title](/mnt/user-data/outputs/<plot_filename>.png)
+-->
+
 
 *Created by [mcp-genelab](https://github.com/sbl-sdsc/mcp-genelab) {__version__} on {today}*
 
@@ -1457,6 +1964,10 @@ IMPORTANT:
 - After the footer above, add a line with the model string you are using).
 - Save the complete transcript to ~/Downloads/ with a descriptive filename (e.g., ~/Downloads/filename-chat-transcript-{today}.md)
 - Use the present_files tool to share the transcript file with the user.
+- ALSO call present_files for EACH plot image (.png) generated during the conversation (volcano plots, Venn diagrams, etc.).
+  You MUST do this for every single image file that was created. Look through the entire conversation history for any file paths ending in .png.
+  Call present_files once with a list of ALL file paths (transcript + all images).
+- Do NOT skip sharing the image files. The user needs both the transcript AND the image files.
 """
         return [types.TextContent(type="text", text=prompt)]
 
@@ -1534,7 +2045,10 @@ RENDERING REQUIREMENTS:
     mcp.add_tool(query, name="query")
     mcp.add_tool(get_node_metadata, name="get_node_metadata")
     mcp.add_tool(get_relationship_metadata, name="get_relationship_metadata")
+    mcp.add_tool(get_study_info, name="get_study_info")
     mcp.add_tool(find_differentially_expressed_genes, name="find_differentially_expressed_genes")
+    mcp.add_tool(find_differentially_methylated_regions, name="find_differentially_methylated_regions")
+    mcp.add_tool(find_differentially_abundant_organisms, name="find_differentially_abundant_organisms")
     mcp.add_tool(find_common_differentially_expressed_genes, name="find_common_differentially_expressed_genes")
     mcp.add_tool(select_assays, name="select_assays")
     mcp.add_tool(create_volcano_plot, name="create_volcano_plot")
@@ -1551,9 +2065,9 @@ async def async_main() -> None:
     db_url = os.getenv("NEO4J_URI", "bolt://localhost:7687")
     username = os.getenv("NEO4J_USERNAME", "neo4j")
     password = os.getenv("NEO4J_PASSWORD", "neo4jdemo")
-    database = os.getenv("NEO4J_DATABASE", "spoke-genelab-v0.0.4")
+    database = os.getenv("NEO4J_DATABASE", "spoke-genelab-v0.3.0")
     transport = os.getenv("MCP_TRANSPORT", "stdio")
-    instructions = os.getenv("INSTRUCTIONS", "")
+    instructions = os.getenv("INSTRUCTIONS", "Query the GeneLab KG to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics), DNA methylation (epigenomics), and Amplicon (metagenomics) data.")
 
     logger.info("Starting mcp-genelab server")
 
