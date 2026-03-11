@@ -95,7 +95,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         
         MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG: log2fc, adj_p_value, group_mean_1, group_stdev_1, group_mean_2, group_stdev_2
         MEASURED_DIFFERENTIAL_METHYLATION_ASmMR: methylation_diff, q_value, group_mean_1, group_stdev_1, group_mean_2, group_stdev_2
-        MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO: log2fc, adj_p_value, lnfc, q_value, group_mean_1, group_stdev_1, group_mean_2, group_stdev_2
+        MEASURED_DIFFERENTIAL_ABUNDANCE_ASmO: log2fc, lnfc, q_value, group_mean_1, group_stdev_1, group_mean_2, group_stdev_2
         
         RELATIONSHIP DIRECTIONS (always use directed arrows in queries):
         (Assay)-[:MEASURED_DIFFERENTIAL_EXPRESSION_ASmMG]->(MGene)
@@ -104,6 +104,23 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         (MGene)-[:METHYLATED_IN_MGmMR]->(MethylationRegion)
         (Study)-[:PERFORMED_SpAS]->(Assay)
         (Mission)-[:CONDUCTED_MIcS]->(Study)
+
+        NODE PROPERTIES - CRITICAL (use EXACTLY these property names, no others exist):
+        MGene:             identifier, symbol, name, organism, taxonomy
+        MethylationRegion: identifier, name, chromosome, start, end, in_promoter, in_exon, in_intron, dist_to_feature
+        Assay:             identifier, name, technology, measurement, differential_analysis_method,
+                           factors_1, factors_2, material_1, material_2, material_id_1, material_id_2,
+                           material_name_1, material_name_2, factor_space_1, factor_space_2
+        Study:             identifier, name, project_title, project_type, description, organism, taxonomy,
+                           host_organism, host_strain
+        Mission:           identifier, name, flight_program, space_program, start_date, end_date
+        Organism:          identifier, name
+
+        COMMON PROPERTY NAME MISTAKES - NEVER USE THESE:
+        WRONG: mg.gene_symbol  RIGHT: mg.symbol
+        WRONG: mg.gene_name    RIGHT: mg.name
+        WRONG: g.gene_symbol   RIGHT: g.symbol
+        WRONG: g.gene_name     RIGHT: g.name
         """
 
         if _is_write_query(query):
@@ -753,7 +770,13 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     qv = r.get('q_value')
                     gm1 = r.get('group_mean_1'); gs1 = r.get('group_stdev_1')
                     gm2 = r.get('group_mean_2'); gs2 = r.get('group_stdev_2')
-                    lines.append(f"| **{gene}** | {name} | {region} | {in_prom_str} | {md:.3f if md is not None else 'N/A'} | {qv if qv is not None else 'N/A'} | {gm1:.3f if gm1 is not None else 'N/A'} | {gs1:.3f if gs1 is not None else 'N/A'} | {gm2:.3f if gm2 is not None else 'N/A'} | {gs2:.3f if gs2 is not None else 'N/A'} |")
+                    md_str  = f"{md:.3f}"  if md  is not None else 'N/A'
+                    qv_str  = f"{qv}"      if qv  is not None else 'N/A'
+                    gm1_str = f"{gm1:.3f}" if gm1 is not None else 'N/A'
+                    gs1_str = f"{gs1:.3f}" if gs1 is not None else 'N/A'
+                    gm2_str = f"{gm2:.3f}" if gm2 is not None else 'N/A'
+                    gs2_str = f"{gs2:.3f}" if gs2 is not None else 'N/A'
+                    lines.append(f"| **{gene}** | {name} | {region} | {in_prom_str} | {md_str} | {qv_str} | {gm1_str} | {gs1_str} | {gm2_str} | {gs2_str} |")
                 return "\n".join(lines)
     
             human_lines = [
@@ -782,7 +805,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
           1) Top-N organisms with increased abundance (lnfc > 0, highest first)
           2) Top-N organisms with decreased abundance (lnfc < 0, lowest first)
         
-        Results include organism name, log2fc, adj_p_value, lnfc, q-value,
+        Results include organism name, log2fc, lnfc, q-value,
         and group means and standard deviations.
         
         FORMATTING INSTRUCTION: RENDER THE RESPONSE IN MARKDOWN FORMAT!
@@ -802,7 +825,6 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
           o.name             AS organism_name,
           o.identifier       AS organism_id,
           r.log2fc           AS log2fc,
-          r.adj_p_value      AS adj_p_value,
           r.lnfc             AS lnfc,
           r.q_value          AS q_value,
           r.group_mean_1     AS group_mean_1,
@@ -822,7 +844,6 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
           o.name             AS organism_name,
           o.identifier       AS organism_id,
           r.log2fc           AS log2fc,
-          r.adj_p_value      AS adj_p_value,
           r.lnfc             AS lnfc,
           r.q_value          AS q_value,
           r.group_mean_1     AS group_mean_1,
@@ -875,16 +896,16 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     return f"## **{title}**\nNo significantly {title.lower()} organisms were found.\n"
                 lines = [
                     f"## **{title}** (showing {len(rows)} of {total_count} total)\n",
-                    f"| Organism | Log2FC | Adj.p-value | LnFC | q-value | Mean ({group1_label}) | SD ({group1_label}) | Mean ({group2_label}) | SD ({group2_label}) |",
-                    "|----------|--------|-------------|------|---------|" + "------------|" * 4
+                    f"| Organism | Log2FC | LnFC | q-value | Mean ({group1_label}) | SD ({group1_label}) | Mean ({group2_label}) | SD ({group2_label}) |",
+                    "|----------|--------|------|---------|" + "------------|" * 4
                 ]
                 for r in rows:
                     org = r.get('organism_name', 'N/A')
-                    l2fc = r.get('log2fc'); adj_p = r.get('adj_p_value')
+                    l2fc = r.get('log2fc')
                     lnfc = r.get('lnfc'); qv = r.get('q_value')
                     gm1 = r.get('group_mean_1'); gs1 = r.get('group_stdev_1')
                     gm2 = r.get('group_mean_2'); gs2 = r.get('group_stdev_2')
-                    lines.append(f"| **{org}** | {l2fc:.4f if l2fc is not None else 'N/A'} | {adj_p if adj_p is not None else 'N/A'} | {lnfc:.4f if lnfc is not None else 'N/A'} | {qv if qv is not None else 'N/A'} | {gm1:.3f if gm1 is not None else 'N/A'} | {gs1:.3f if gs1 is not None else 'N/A'} | {gm2:.3f if gm2 is not None else 'N/A'} | {gs2:.3f if gs2 is not None else 'N/A'} |")
+                    lines.append(f"| **{org}** | {l2fc:.4f if l2fc is not None else 'N/A'} | {lnfc:.4f if lnfc is not None else 'N/A'} | {qv if qv is not None else 'N/A'} | {gm1:.3f if gm1 is not None else 'N/A'} | {gs1:.3f if gs1 is not None else 'N/A'} | {gm2:.3f if gm2 is not None else 'N/A'} | {gs2:.3f if gs2 is not None else 'N/A'} |")
                 return "\n".join(lines)
     
             human_lines = [
@@ -2065,7 +2086,7 @@ async def async_main() -> None:
     db_url = os.getenv("NEO4J_URI", "bolt://localhost:7687")
     username = os.getenv("NEO4J_USERNAME", "neo4j")
     password = os.getenv("NEO4J_PASSWORD", "neo4jdemo")
-    database = os.getenv("NEO4J_DATABASE", "spoke-genelab-v0.3.0")
+    database = os.getenv("NEO4J_DATABASE", "spoke-genelab-v0.3.1")
     transport = os.getenv("MCP_TRANSPORT", "stdio")
     instructions = os.getenv("INSTRUCTIONS", "Query the GeneLab KG to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics), DNA methylation (epigenomics), and Amplicon (metagenomics) data.")
 
