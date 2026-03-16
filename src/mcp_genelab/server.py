@@ -24,7 +24,8 @@ from neo4j import (
     AsyncDriver,
     AsyncGraphDatabase,
     AsyncResult,
-    AsyncTransaction
+    AsyncTransaction,
+    READ_ACCESS
 )
 from pydantic import Field
 
@@ -63,7 +64,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
 """
 
         try:
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 results_json_str = await session.execute_read(
                     _read, get_schema_query, dict()
                 )
@@ -127,7 +128,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             raise ValueError("Only MATCH queries are allowed for read-query")
 
         try:
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 results_json_str = await session.execute_read(_read, query, params)
 
                 logger.debug(f"Read query returned {len(results_json_str)} rows")
@@ -150,7 +151,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         """
 
         try:
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 results_json_str = await session.execute_read(
                     _read, metadata_query, {}
                 )
@@ -177,7 +178,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         """
 
         try:
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 results_json_str = await session.execute_read(
                     _read, metadata_query, {}
                 )
@@ -274,7 +275,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         try:
             import json as _json
             
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 study_json_str = await session.execute_read(_read, study_cypher, {"study_id": study_id})
                 assay_json_str = await session.execute_read(_read, assay_cypher, {"study_id": study_id})
             
@@ -381,7 +382,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         """
 
         try:
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 res = await session.run(cypher, {"study_id": study_id})
                 rows = await res.data()
         except Exception as e:
@@ -596,7 +597,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         try:
             import json as _json
     
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 factors_json_str = await session.execute_read(_read, factors_cypher, {"assay_id": assay_id})
                 up_json_str = await session.execute_read(_read, up_cypher, {"assay_id": assay_id, "top_n": top_n})
                 down_json_str = await session.execute_read(_read, down_cypher, {"assay_id": assay_id, "top_n": top_n})
@@ -730,7 +731,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         try:
             import json as _json
     
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 factors_json_str = await session.execute_read(_read, factors_cypher, {"assay_id": assay_id})
                 hyper_json_str = await session.execute_read(_read, hyper_cypher, {"assay_id": assay_id, "top_n": top_n})
                 hypo_json_str = await session.execute_read(_read, hypo_cypher, {"assay_id": assay_id, "top_n": top_n})
@@ -869,7 +870,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         try:
             import json as _json
     
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 factors_json_str = await session.execute_read(_read, factors_cypher, {"assay_id": assay_id})
                 up_json_str = await session.execute_read(_read, up_cypher, {"assay_id": assay_id, "top_n": top_n})
                 down_json_str = await session.execute_read(_read, down_cypher, {"assay_id": assay_id, "top_n": top_n})
@@ -973,7 +974,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                     ORDER BY m.log2fc ASC
                     """
                     
-                    async with neo4j_driver.session(database=database) as session:
+                    async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                         # Get upregulated genes
                         up_results = await session.execute_read(
                             _read, up_query, {"assay_id": assay_id, "log2fc_threshold": log2fc_threshold, "adj_p_threshold": adj_p_threshold}
@@ -1105,7 +1106,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         
         try:           
             # Query the database
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 result_json_str = await session.execute_read(
                     _read, volcano_cypher, {"assay_id": assay_id}
                 )
@@ -1382,7 +1383,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             RETURN g.symbol as gene_symbol, m.log2fc as log2fc
             """
             
-            async with neo4j_driver.session(database=database) as session:
+            async with neo4j_driver.session(database=database, default_access_mode=READ_ACCESS) as session:
                 # Get info for assay 1
                 result1 = await session.execute_read(_read, assay_info_query, {"assay_id": assay_id_1})
                 data1 = json.loads(result1)
@@ -2088,9 +2089,13 @@ async def async_main() -> None:
     password = os.getenv("NEO4J_PASSWORD", "neo4jdemo")
     database = os.getenv("NEO4J_DATABASE", "spoke-genelab-v0.3.1")
     transport = os.getenv("MCP_TRANSPORT", "stdio")
+    host = os.getenv("MCP_HOST", "127.0.0.1")
+    port = int(os.getenv("MCP_PORT", "8000"))
     instructions = os.getenv("INSTRUCTIONS", "Query the GeneLab KG to identify NASA spaceflight experiments containing omics datasets, specifically differential gene expression (transcriptomics), DNA methylation (epigenomics), and Amplicon (metagenomics) data.")
 
-    logger.info("Starting mcp-genelab server")
+    logger.info(f"Starting mcp-genelab server (transport={transport})")
+    logger.info(f"Neo4j: {db_url}, database: {database}")
+    logger.info("All Neo4j sessions use READ_ACCESS mode (write operations are blocked)")
 
     neo4j_driver = AsyncGraphDatabase.driver(
         db_url,
@@ -2107,8 +2112,10 @@ async def async_main() -> None:
             await mcp.run_stdio_async()
         case "sse":
             await mcp.run_sse_async()
+        case "streamable-http" | "http":
+            await mcp.run_async(transport="streamable-http", host=host, port=port)
         case _:
-            raise ValueError(f"Invalid transport: {transport} | Must be either 'stdio' or 'sse'")
+            raise ValueError(f"Invalid transport: {transport} | Must be 'stdio', 'sse', 'streamable-http', or 'http'")
 
 
 def main():
