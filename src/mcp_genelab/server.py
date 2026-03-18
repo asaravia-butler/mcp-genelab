@@ -48,6 +48,7 @@ def _is_write_query(query: str) -> bool:
 def create_mcp_server(neo4j_driver: AsyncDriver, database: str = "neo4j", instructions: str = "") -> FastMCP:
     mcp: FastMCP = FastMCP("mcp-genelab", dependencies=["neo4j", "pydantic"], instructions=instructions)
 
+    @mcp.tool()
     async def get_neo4j_schema() -> list[types.TextContent]:
         """List all nodes, their attributes and their relationships to other nodes in the neo4j database.
         If this fails with a message that includes "Neo.ClientError.Procedure.ProcedureNotFound"
@@ -78,6 +79,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Database error retrieving schema: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
+    @mcp.tool()
     async def query(
         query: str = Field(..., description="The Cypher query to execute."),
         params: Optional[dict[str, Any]] = Field(
@@ -141,6 +143,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 types.TextContent(type="text", text=f"Error: {e}\n{query}\n{params}")
             ]
 
+    @mcp.tool()
     async def get_node_metadata() -> list[types.TextContent]:
         """Get metadata for all nodes from MetaNode nodes in the knowledge graph."""
 
@@ -165,6 +168,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
 
+    @mcp.tool()
     async def get_relationship_metadata() -> list[types.TextContent]:
         """Get descriptions of properties of all relationships in the knowledge graph."""
 
@@ -227,6 +231,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Database error retrieving relationship metadata: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
+    @mcp.tool()
     async def get_study_info(
         study_id: str = Field(..., description="Study identifier (e.g., 'OSD-267')")
     ) -> list[types.TextContent]:
@@ -349,6 +354,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Error in get_study_info: {e}")
             return [types.TextContent(type="text", text=f"Error in get_study_info: {e}")]
 
+    @mcp.tool()
     async def select_assays(
         study_id: Optional[str] = None,
         selection: Optional[str] = None
@@ -525,6 +531,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             types.TextContent(type="text", text="\n".join(lines), mimeType="text/markdown"),
         ]
     
+    @mcp.tool()
     async def find_differentially_expressed_genes(
         assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
         top_n: int = Field(10, description="How many genes to display for each of up- and down-regulated lists")
@@ -653,6 +660,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Error in find_differentially_expressed_genes: {e}")
             return [types.TextContent(type="text", text=f"Error in find_differentially_expressed_genes: {e}")]
 
+    @mcp.tool()
     async def find_differentially_methylated_regions(
         assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-48-abc123')"),
         top_n: int = Field(10, description="How many regions to display for each of hyper- and hypo-methylated lists")
@@ -796,6 +804,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Error in find_differentially_methylated_regions: {e}")
             return [types.TextContent(type="text", text=f"Error in find_differentially_methylated_regions: {e}")]
 
+    @mcp.tool()
     async def find_differentially_abundant_organisms(
         assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
         top_n: int = Field(10, description="How many organisms to display for each of increased and decreased abundance lists")
@@ -925,6 +934,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Error in find_differentially_abundant_organisms: {e}")
             return [types.TextContent(type="text", text=f"Error in find_differentially_abundant_organisms: {e}")]
 
+    @mcp.tool()
     async def find_common_differentially_expressed_genes(
             assay_ids: list[str] = Field(..., description="List of assay identifiers (e.g., ['OSD-253-abc123', 'OSD-253-def456'])"),
             log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for filtering genes (default: 1.0 = 2-fold change)"),
@@ -1062,6 +1072,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
                 )]
 
     
+    @mcp.tool()
     async def create_volcano_plot(
         assay_id: str = Field(..., description="Assay identifier (e.g., 'OSD-253-6c5f9f37b9cb2ebeb2743875af4bdc86')"),
         log2fc_threshold: float = Field(1.0, description="Log2 fold change threshold for highlighting significant genes"),
@@ -1345,6 +1356,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             logger.error(f"Error creating volcano plot: {e}")
             return [types.TextContent(type="text", text=f"Error creating volcano plot: {e}")]
 
+    @mcp.tool()
     async def create_venn_diagram(
         assay_id_1: str = Field(..., description="First assay identifier (e.g., 'OSD-511-53054e738e335bc645cb620c95916e5f')"),
         assay_id_2: str = Field(..., description="Second assay identifier (e.g., 'OSD-511-8974299195d78d74d7f3f085f2b48981')"),
@@ -1869,6 +1881,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
             traceback.print_exc()
             return [types.TextContent(type="text", text=f"Error creating Venn diagram: {e}")]
 
+    @mcp.tool()
     def clean_mermaid_diagram(mermaid_content: str) -> list[types.TextContent]:
         """Clean a Mermaid class diagram by removing unwanted elements.
         
@@ -1952,6 +1965,7 @@ RETURN label, apoc.map.fromPairs(attributes) as attributes, apoc.map.fromPairs(r
         cleaned_content = '\n'.join(cleaned_lines)
         return [types.TextContent(type="text", text=cleaned_content)]
 
+    @mcp.tool()
     async def create_chat_transcript() -> list[types.TextContent]:
         """Prompt for creating a chat transcript in markdown format with user prompts and Claude responses."""
         from datetime import datetime
@@ -1993,6 +2007,7 @@ IMPORTANT:
 """
         return [types.TextContent(type="text", text=prompt)]
 
+    @mcp.tool()
     async def visualize_schema() -> list[types.TextContent]:
         """Prompt for visualizing the knowledge graph schema using a Mermaid class diagram."""
         prompt = """Visualize the knowledge graph schema using a Mermaid class diagram. 
@@ -2063,21 +2078,6 @@ RENDERING REQUIREMENTS:
         return [types.TextContent(type="text", text=prompt)]
 
     
-    mcp.add_tool(get_neo4j_schema, name="get_neo4j_schema")
-    mcp.add_tool(query, name="query")
-    mcp.add_tool(get_node_metadata, name="get_node_metadata")
-    mcp.add_tool(get_relationship_metadata, name="get_relationship_metadata")
-    mcp.add_tool(get_study_info, name="get_study_info")
-    mcp.add_tool(find_differentially_expressed_genes, name="find_differentially_expressed_genes")
-    mcp.add_tool(find_differentially_methylated_regions, name="find_differentially_methylated_regions")
-    mcp.add_tool(find_differentially_abundant_organisms, name="find_differentially_abundant_organisms")
-    mcp.add_tool(find_common_differentially_expressed_genes, name="find_common_differentially_expressed_genes")
-    mcp.add_tool(select_assays, name="select_assays")
-    mcp.add_tool(create_volcano_plot, name="create_volcano_plot")
-    mcp.add_tool(create_venn_diagram, name="create_venn_diagram")
-    mcp.add_tool(clean_mermaid_diagram, name="clean_mermaid_diagram")
-    mcp.add_tool(create_chat_transcript, name="create_chat_transcript")
-    mcp.add_tool(visualize_schema, name="visualize_schema")
     
     return mcp
 
