@@ -45,8 +45,8 @@ def _is_write_query(query: str) -> bool:
         is not None
     )
 
-def create_mcp_server(neo4j_driver: AsyncDriver, database: str = "neo4j", instructions: str = "") -> FastMCP:
-    mcp: FastMCP = FastMCP("mcp-genelab", dependencies=["neo4j", "pydantic"], instructions=instructions)
+def create_mcp_server(neo4j_driver: AsyncDriver, database: str = "neo4j", instructions: str = "", host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
+    mcp: FastMCP = FastMCP("mcp-genelab", dependencies=["neo4j", "pydantic"], instructions=instructions, host=host, port=port)
 
     @mcp.tool()
     async def get_neo4j_schema() -> list[types.TextContent]:
@@ -2105,7 +2105,7 @@ async def async_main() -> None:
         ),
     )
 
-    mcp = create_mcp_server(neo4j_driver, database, instructions)
+    mcp = create_mcp_server(neo4j_driver, database, instructions, host=host, port=port)
 
     match transport:
         case "stdio":
@@ -2113,7 +2113,7 @@ async def async_main() -> None:
         case "sse":
             await mcp.run_sse_async()
         case "streamable-http" | "http":
-            await mcp.run_async(transport="streamable-http", host=host, port=port)
+            await mcp.run_streamable_http_async()
         case _:
             raise ValueError(f"Invalid transport: {transport} | Must be 'stdio', 'sse', 'streamable-http', or 'http'")
 

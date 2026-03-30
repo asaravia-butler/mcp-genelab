@@ -1,6 +1,6 @@
 # Dockerfile for mcp-genelab MCP Server
 # Runs the MCP GeneLab server with Streamable HTTP transport
-# for remote deployment behind a TLS reverse proxy (Caddy).
+# for remote deployment behind a TLS reverse proxy.
 
 FROM python:3.12-slim
 
@@ -15,6 +15,7 @@ RUN apt-get update && \
 
 # Copy the project files
 COPY pyproject.toml .
+COPY README.md .
 COPY src/ src/
 
 # Install the package and its dependencies
