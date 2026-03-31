@@ -8,6 +8,7 @@ WORKDIR /app
 
 # Install system dependencies for matplotlib
 RUN apt-get update && \
+    apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \

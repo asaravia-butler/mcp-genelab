@@ -46,7 +46,7 @@ def _is_write_query(query: str) -> bool:
     )
 
 def create_mcp_server(neo4j_driver: AsyncDriver, database: str = "neo4j", instructions: str = "", host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
-    mcp: FastMCP = FastMCP("mcp-genelab", dependencies=["neo4j", "pydantic"], instructions=instructions, host=host, port=port)
+    mcp: FastMCP = FastMCP("mcp-genelab", dependencies=["neo4j", "pydantic"], instructions=instructions, host=host, port=port, stateless_http=True)
 
     @mcp.tool()
     async def get_neo4j_schema() -> list[types.TextContent]:
